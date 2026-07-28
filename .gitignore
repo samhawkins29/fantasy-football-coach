@@ -1,0 +1,44 @@
+# ---- Secrets / tokens (NEVER commit) ----
+.env
+.env.*
+!.env.example
+.tokens.json
+token.json
+*.token
+*.pem
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Test / tooling caches ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.cache/
+
+# ---- Local data / caches (future modules) ----
+*.sqlite
+*.sqlite3
+data/cache/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
