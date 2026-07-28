@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fantasy-coach"
 version = "0.1.0"
-description = "Season-long AI Fantasy Football assistant coach (Yahoo). M1: Auth / OAuth 2.0 + token store."
+description = "Season-long AI Fantasy Football assistant coach (Yahoo). M1: auth / OAuth 2.0 + token store. M2: Yahoo Fantasy read client."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

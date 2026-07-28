@@ -1,9 +1,10 @@
 """Fantasy Coach — a season-long AI Fantasy Football assistant coach.
 
-This package currently implements **M1: Auth / OAuth 2.0 + token store**, the
-shared foundation every other module builds on (see FANTASY_COACH_FRAMEWORK.md
-§5). The public auth surface that M2 (the Yahoo client) will consume is
-re-exported here for convenience.
+This package implements **M1: Auth / OAuth 2.0 + token store** and
+**M2: the Yahoo Fantasy read client** (:class:`fantasy_coach.clients.YahooClient`),
+the shared foundation the projection engine and draft monitor build on (see
+FANTASY_COACH_FRAMEWORK.md §5). The public auth surface M2 consumes, and the
+Yahoo client itself, are re-exported here for convenience.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from fantasy_coach.auth import (
     YahooOAuthClient,
     get_authed_client,
 )
+from fantasy_coach.clients import YahooClient
 from fantasy_coach.config import Config
 
 __all__ = [
@@ -27,4 +29,5 @@ __all__ = [
     "YahooOAuthClient",
     "AuthedClient",
     "get_authed_client",
+    "YahooClient",
 ]

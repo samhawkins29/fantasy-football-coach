@@ -1,0 +1,283 @@
+{
+  "fantasy_content": {
+    "xml:lang": "en-US",
+    "yahoo:uri": "/fantasy/v2/league/449.l.123456/transactions",
+    "league": [
+      {
+        "league_key": "449.l.123456",
+        "league_id": "123456",
+        "name": "Sunday Scaries",
+        "url": "https://football.fantasysports.yahoo.com/f1/123456",
+        "logo_url": "",
+        "draft_status": "predraft",
+        "num_teams": 12,
+        "edit_key": "1",
+        "weekly_deadline": "",
+        "league_update_timestamp": "1757548800",
+        "scoring_type": "head",
+        "league_type": "private",
+        "renew": "",
+        "renewed": "",
+        "iris_group_chat_id": "",
+        "allow_add_to_dl_extra_pos": 0,
+        "is_pro_league": "0",
+        "is_cash_league": "0",
+        "current_week": 1,
+        "start_week": "1",
+        "start_date": "2026-09-10",
+        "end_week": "17",
+        "end_date": "2026-12-28",
+        "is_plus_league": "0",
+        "game_code": "nfl",
+        "season": "2026"
+      },
+      {
+        "transactions": {
+          "0": {
+            "transaction": [
+              {
+                "transaction_key": "449.l.123456.tr.14",
+                "transaction_id": "14",
+                "type": "add/drop",
+                "status": "successful",
+                "timestamp": "1758153600",
+                "faab_bid": "17"
+              },
+              {
+                "players": {
+                  "0": {
+                    "player": [
+                      [
+                        {
+                          "player_key": "449.p.33415"
+                        },
+                        {
+                          "player_id": "33415"
+                        },
+                        {
+                          "name": {
+                            "full": "Cam Skattebo",
+                            "first": "Cam",
+                            "last": "Skattebo"
+                          }
+                        },
+                        {
+                          "editorial_team_abbr": "NYG"
+                        },
+                        {
+                          "display_position": "RB"
+                        },
+                        {
+                          "position_type": "O"
+                        }
+                      ],
+                      {
+                        "transaction_data": {
+                          "type": "add",
+                          "source_type": "waivers",
+                          "destination_type": "team",
+                          "destination_team_key": "449.l.123456.t.1",
+                          "destination_team_name": "Gridiron Gurus"
+                        }
+                      }
+                    ]
+                  },
+                  "1": {
+                    "player": [
+                      [
+                        {
+                          "player_key": "449.p.31030"
+                        },
+                        {
+                          "player_id": "31030"
+                        },
+                        {
+                          "name": {
+                            "full": "Tony Pollard",
+                            "first": "Tony",
+                            "last": "Pollard"
+                          }
+                        },
+                        {
+                          "editorial_team_abbr": "Ten"
+                        },
+                        {
+                          "display_position": "RB"
+                        },
+                        {
+                          "position_type": "O"
+                        }
+                      ],
+                      {
+                        "transaction_data": [
+                          {
+                            "type": "drop",
+                            "source_type": "team",
+                            "source_team_key": "449.l.123456.t.1",
+                            "source_team_name": "Gridiron Gurus",
+                            "destination_type": "waivers"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "count": 2
+                }
+              }
+            ]
+          },
+          "1": {
+            "transaction": [
+              {
+                "transaction_key": "449.l.123456.tr.9",
+                "transaction_id": "9",
+                "type": "trade",
+                "status": "successful",
+                "timestamp": "1757894400",
+                "trader_team_key": "449.l.123456.t.2",
+                "trader_team_name": "Hurts So Good",
+                "tradee_team_key": "449.l.123456.t.3",
+                "tradee_team_name": "Ja'Marr the Merrier"
+              },
+              {
+                "players": {
+                  "0": {
+                    "player": [
+                      [
+                        {
+                          "player_key": "449.p.31889"
+                        },
+                        {
+                          "player_id": "31889"
+                        },
+                        {
+                          "name": {
+                            "full": "Trey McBride",
+                            "first": "Trey",
+                            "last": "McBride"
+                          }
+                        },
+                        {
+                          "editorial_team_abbr": "Ari"
+                        },
+                        {
+                          "display_position": "TE"
+                        },
+                        {
+                          "position_type": "O"
+                        }
+                      ],
+                      {
+                        "transaction_data": {
+                          "type": "trade",
+                          "source_type": "team",
+                          "source_team_key": "449.l.123456.t.2",
+                          "destination_type": "team",
+                          "destination_team_key": "449.l.123456.t.3"
+                        }
+                      }
+                    ]
+                  },
+                  "1": {
+                    "player": [
+                      [
+                        {
+                          "player_key": "449.p.32690"
+                        },
+                        {
+                          "player_id": "32690"
+                        },
+                        {
+                          "name": {
+                            "full": "Sam LaPorta",
+                            "first": "Sam",
+                            "last": "LaPorta"
+                          }
+                        },
+                        {
+                          "editorial_team_abbr": "Det"
+                        },
+                        {
+                          "display_position": "TE"
+                        },
+                        {
+                          "position_type": "O"
+                        }
+                      ],
+                      {
+                        "transaction_data": {
+                          "type": "trade",
+                          "source_type": "team",
+                          "source_team_key": "449.l.123456.t.3",
+                          "destination_type": "team",
+                          "destination_team_key": "449.l.123456.t.2"
+                        }
+                      }
+                    ]
+                  },
+                  "count": 2
+                }
+              }
+            ]
+          },
+          "2": {
+            "transaction": [
+              {
+                "transaction_key": "449.l.123456.tr.3",
+                "transaction_id": "3",
+                "type": "add",
+                "status": "successful",
+                "timestamp": "1757548800"
+              },
+              {
+                "players": {
+                  "0": {
+                    "player": [
+                      [
+                        {
+                          "player_key": "449.p.32710"
+                        },
+                        {
+                          "player_id": "32710"
+                        },
+                        {
+                          "name": {
+                            "full": "Chig Okonkwo",
+                            "first": "Chig",
+                            "last": "Okonkwo"
+                          }
+                        },
+                        {
+                          "editorial_team_abbr": "Ten"
+                        },
+                        {
+                          "display_position": "TE"
+                        },
+                        {
+                          "position_type": "O"
+                        }
+                      ],
+                      {
+                        "transaction_data": {
+                          "type": "add",
+                          "source_type": "freeagents",
+                          "destination_type": "team",
+                          "destination_team_key": "449.l.123456.t.1"
+                        }
+                      }
+                    ]
+                  },
+                  "count": 1
+                }
+              }
+            ]
+          },
+          "count": 3
+        }
+      }
+    ],
+    "time": "82.35205078125ms",
+    "copyright": "Data provided by Yahoo! and STATS, LLC",
+    "refresh_rate": "60"
+  }
+}

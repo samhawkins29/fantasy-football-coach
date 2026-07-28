@@ -1,0 +1,164 @@
+{
+  "fantasy_content": {
+    "xml:lang": "en-US",
+    "yahoo:uri": "/fantasy/v2/league/449.l.123456/draftresults",
+    "league": [
+      {
+        "league_key": "449.l.123456",
+        "league_id": "123456",
+        "name": "Sunday Scaries",
+        "url": "https://football.fantasysports.yahoo.com/f1/123456",
+        "logo_url": "",
+        "draft_status": "predraft",
+        "num_teams": 12,
+        "edit_key": "1",
+        "weekly_deadline": "",
+        "league_update_timestamp": "1757548800",
+        "scoring_type": "head",
+        "league_type": "private",
+        "renew": "",
+        "renewed": "",
+        "iris_group_chat_id": "",
+        "allow_add_to_dl_extra_pos": 0,
+        "is_pro_league": "0",
+        "is_cash_league": "0",
+        "current_week": 1,
+        "start_week": "1",
+        "start_date": "2026-09-10",
+        "end_week": "17",
+        "end_date": "2026-12-28",
+        "is_plus_league": "0",
+        "game_code": "nfl",
+        "season": "2026"
+      },
+      {
+        "draft_results": {
+          "0": {
+            "draft_result": {
+              "pick": 4,
+              "round": 1,
+              "team_key": "449.l.123456.t.4",
+              "player_key": "449.p.32721"
+            }
+          },
+          "1": {
+            "draft_result": {
+              "pick": 5,
+              "round": 1,
+              "team_key": "449.l.123456.t.5",
+              "player_key": "449.p.31002"
+            }
+          },
+          "2": {
+            "draft_result": {
+              "pick": 6,
+              "round": 1,
+              "team_key": "449.l.123456.t.6",
+              "player_key": "449.p.31056"
+            }
+          },
+          "3": {
+            "draft_result": {
+              "pick": 7,
+              "round": 1,
+              "team_key": "449.l.123456.t.7",
+              "player_key": "449.p.33401"
+            }
+          },
+          "4": {
+            "draft_result": {
+              "pick": 8,
+              "round": 1,
+              "team_key": "449.l.123456.t.8",
+              "player_key": "449.p.30125"
+            }
+          },
+          "5": {
+            "draft_result": {
+              "pick": 9,
+              "round": 1,
+              "team_key": "449.l.123456.t.9",
+              "player_key": "449.p.32725"
+            }
+          },
+          "6": {
+            "draft_result": {
+              "pick": 10,
+              "round": 1,
+              "team_key": "449.l.123456.t.10",
+              "player_key": "449.p.33393"
+            }
+          },
+          "7": {
+            "draft_result": {
+              "pick": 11,
+              "round": 1,
+              "team_key": "449.l.123456.t.11",
+              "player_key": "449.p.31017"
+            }
+          },
+          "8": {
+            "draft_result": {
+              "pick": 12,
+              "round": 1,
+              "team_key": "449.l.123456.t.12",
+              "player_key": "449.p.30984"
+            }
+          },
+          "9": {
+            "draft_result": {
+              "pick": 13,
+              "round": 2,
+              "team_key": "449.l.123456.t.12",
+              "player_key": "449.p.33396"
+            }
+          },
+          "10": {
+            "draft_result": {
+              "pick": 14,
+              "round": 2,
+              "team_key": "",
+              "player_key": ""
+            }
+          },
+          "11": {
+            "draft_result": {
+              "pick": 15,
+              "round": 2,
+              "team_key": "",
+              "player_key": ""
+            }
+          },
+          "12": {
+            "draft_result": {
+              "pick": 1,
+              "round": 1,
+              "team_key": "449.l.123456.t.1",
+              "player_key": "449.p.31883"
+            }
+          },
+          "13": {
+            "draft_result": {
+              "pick": 2,
+              "round": 1,
+              "team_key": "449.l.123456.t.2",
+              "player_key": "449.p.32671"
+            }
+          },
+          "14": {
+            "draft_result": {
+              "pick": 3,
+              "round": 1,
+              "team_key": "449.l.123456.t.3",
+              "player_key": "449.p.30977"
+            }
+          },
+          "count": 15
+        }
+      }
+    ],
+    "time": "82.35205078125ms",
+    "copyright": "Data provided by Yahoo! and STATS, LLC",
+    "refresh_rate": "60"
+  }
+}

@@ -4,10 +4,10 @@ A season-long AI Fantasy Football assistant coach for Yahoo Fantasy (NFL-first).
 See [`FANTASY_COACH_FRAMEWORK.md`](FANTASY_COACH_FRAMEWORK.md) for the full
 vision, architecture, and module roadmap.
 
-> **Status:** **M1 — Auth / OAuth 2.0 + token store** is implemented. This is
-> the shared foundation (framework §5, the pre-draft critical path start).
-> M2+ (Yahoo client, data ingestion, projection engine, draft recommender) come
-> next and build on the auth layer shipped here.
+> **Status:** **M1 — Auth / OAuth 2.0 + token store** and **M2 — Yahoo Fantasy
+> read client** are implemented (framework §5, the pre-draft critical path).
+> M3+ (data ingestion + id mapping, projection engine, draft recommender) come
+> next and build on the layers shipped here.
 
 ---
 
@@ -56,15 +56,25 @@ fantasy-football-coach/
 │       │   ├── token_store.py     # Token dataclass + TokenStore (load/save)
 │       │   ├── oauth.py           # YahooOAuthClient: consent URL, exchange, refresh
 │       │   └── session.py         # AuthedClient + get_authed_client()  <- M2 uses this
-│       └── clients/
-│           └── __init__.py        # reserved for M2 (Yahoo client)
+│       └── clients/               # M2: the Yahoo Fantasy read client
+│           ├── __init__.py        # public M2 surface
+│           ├── keys.py            # build/split game, league, team, player keys
+│           ├── models.py          # typed dataclasses (League, Player, ...)
+│           ├── parsers.py         # the one Yahoo-JSON normalization layer
+│           ├── throttle.py        # conservative rate limiting (§7)
+│           └── yahoo.py           # YahooClient: the typed read surface
 └── tests/
-    ├── conftest.py                # offline fixtures (httpx.MockTransport)
+    ├── conftest.py                # offline fixtures (httpx.MockTransport, FakeClock)
+    ├── fixtures/                  # recorded-shape Yahoo JSON (incl. pagination)
     ├── test_config.py             # config loading + validation
     ├── test_token_store.py        # token model + persistence
     ├── test_oauth.py              # consent URL, code exchange, refresh (mocked HTTP)
     ├── test_session.py            # bearer injection, pre-emptive refresh, 401 retry
-    └── test_cli.py                # CLI smoke tests (no network)
+    ├── test_cli.py                # CLI smoke tests (no network)
+    ├── test_keys.py               # composite-key construction/parsing
+    ├── test_throttle.py           # rate limiting + exponential backoff (fake clock)
+    ├── test_yahoo_parsers.py      # every parser against the JSON fixtures
+    └── test_yahoo_client.py       # pagination, caching, throttling, retries
 ```
 
 **Stack** (per framework §2): Python 3.11+, `httpx` (owns the token dance and
@@ -239,6 +249,61 @@ Key surface (all in `fantasy_coach.auth`):
 
 ---
 
+## What M2 does
+
+M2 is a clean, typed **read** client over the Yahoo Fantasy API, built directly
+on `AuthedClient`. It deliberately does not delegate to `yfpy` /
+`yahoo_fantasy_api` — framework §2.4 wants a raw `httpx` escape hatch that can't
+break the week before the draft, and owning the parse layer is what keeps the
+whole thing offline-testable.
+
+```python
+from fantasy_coach import Config, get_authed_client
+from fantasy_coach.clients import YahooClient
+
+client = YahooClient(get_authed_client(Config.load()))
+
+leagues  = client.get_user_leagues(2026)                  # discovery + game_key
+settings = client.get_league_settings(leagues[0].league_key)
+teams    = client.get_league_teams(leagues[0].league_key)
+roster   = client.get_team_roster(teams[0].team_key, week=1)
+players  = client.get_players(leagues[0].league_key, status="A",
+                              out=("percent_owned", "draft_analysis", "ranks"))
+picks    = client.get_draft_results(leagues[0].league_key)  # never cached
+```
+
+| Method | Returns |
+|---|---|
+| `get_game()` / `get_game_key()` | `Game` / the season's numeric `game_key` |
+| `get_user_leagues(season=None)` | `list[League]` |
+| `get_league(league_key)` | `League` |
+| `get_league_settings(league_key)` | `LeagueSettings` (scoring, slots, waivers, playoffs) |
+| `get_league_teams(league_key)` | `list[Team]` |
+| `get_team_roster(team_key, week=None)` | `TeamRoster` (`.starters` / `.bench`) |
+| `get_players(league_key, ...)` | `list[Player]`, paginated 25 at a time |
+| `get_draft_results(league_key)` | `list[DraftPick]` |
+| `get_transactions(league_key, ...)` | `list[Transaction]` |
+| `get_matchups(league_key, week)` | `list[Matchup]` |
+| `raw(path, params=None)` | the unmodelled JSON escape hatch |
+
+**Yahoo's JSON is normalized once, in `parsers.py`** (framework §2.3), so no
+other module sees its three quirks: collections encoded as `{"0": …, "count": N}`
+objects, entity fields split across positional arrays of one-key dicts, and
+sub-resources (notably `transaction_data`) that arrive as a bare object in one
+leg and a one-element list in the next.
+
+**Rate limiting.** The default client throttles to one request every 2.5s —
+framework §7's live-draft-safe rate — so a naive poll loop can't hammer Yahoo.
+`429`/`999` responses back off exponentially (2s → 4s → 8s). Every read is warm
+cached for 15 minutes **except `get_draft_results`**, which always goes live.
+
+**Player identity for M3.** Every `Player` carries Yahoo's `player_id` *and*
+`player_key` plus name/team/position; `player.identity()` projects that to a
+`PlayerIdentity`, which is exactly what M3's crosswalk (§3.2) joins on —
+`yahoo_id` first, normalized `(name, position, team)` as the fallback.
+
+---
+
 ## Security notes
 
 - `.env` and `.tokens.json` are git-ignored. **Never commit them.**
@@ -260,4 +325,15 @@ pytest -v         # verbose
 
 The suite covers the token store, the expiry/refresh logic (token endpoint
 mocked with `httpx.MockTransport`), config loading, the `AuthedClient` 401-retry
-path, and CLI parsing. No test touches the network.
+path, and CLI parsing — plus, for M2, every Yahoo parser against recorded-shape
+JSON fixtures, player pagination, the warm cache, throttle spacing, and the
+`429`/`999` backoff path.
+
+**No test touches the network.** Yahoo responses are served by
+`httpx.MockTransport` injected into `AuthedClient`, and the throttle/cache
+clocks are faked, so the whole suite runs in well under a second and never
+sleeps. You can prove the offline claim by blocking sockets outright:
+
+```bash
+python -m pytest -q -p nonet    # with a plugin that raises on socket.connect
+```

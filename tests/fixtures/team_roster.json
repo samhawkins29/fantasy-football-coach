@@ -1,0 +1,1543 @@
+{
+  "fantasy_content": {
+    "xml:lang": "en-US",
+    "yahoo:uri": "/fantasy/v2/team/449.l.123456.t.1/roster",
+    "team": [
+      [
+        {
+          "team_key": "449.l.123456.t.1"
+        },
+        {
+          "team_id": "1"
+        },
+        {
+          "name": "Gridiron Gurus"
+        },
+        {
+          "url": "https://football.fantasysports.yahoo.com/f1/123456/1"
+        },
+        {
+          "team_logos": [
+            {
+              "team_logo": {
+                "size": "large",
+                "url": "https://s.yimg.com/team_1.png"
+              }
+            }
+          ]
+        },
+        {
+          "is_owned_by_current_login": 1
+        },
+        {
+          "waiver_priority": 1
+        },
+        {
+          "faab_balance": "87"
+        },
+        {
+          "number_of_moves": 4
+        },
+        {
+          "number_of_trades": 1
+        },
+        {
+          "roster_adds": {
+            "coverage_type": "week",
+            "coverage_value": "1",
+            "value": "0"
+          }
+        },
+        {
+          "league_scoring_type": "head"
+        },
+        {
+          "has_draft_grade": 0
+        },
+        [],
+        {
+          "managers": [
+            {
+              "manager": {
+                "manager_id": "1",
+                "nickname": "Sam",
+                "guid": "GUID1",
+                "is_commissioner": "1"
+              }
+            }
+          ]
+        }
+      ],
+      {
+        "roster": {
+          "coverage_type": "week",
+          "week": "1",
+          "is_editable": 1,
+          "0": {
+            "players": {
+              "0": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.30123"
+                    },
+                    {
+                      "player_id": "30123"
+                    },
+                    {
+                      "name": {
+                        "full": "Josh Allen",
+                        "first": "Josh",
+                        "last": "Allen",
+                        "ascii_first": "Josh",
+                        "ascii_last": "Allen"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/30123"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.30123"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.12"
+                    },
+                    {
+                      "editorial_team_full_name": "Buf Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "Buf"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "7"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "27"
+                    },
+                    {
+                      "display_position": "QB"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/30123.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/30123.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "QB"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "QB"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "31",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "33",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "31.6"
+                      },
+                      {
+                        "average_round": "3.6"
+                      },
+                      {
+                        "average_cost": "38.4"
+                      },
+                      {
+                        "percent_drafted": "0.99"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 99
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "QB"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "1": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.32671"
+                    },
+                    {
+                      "player_id": "32671"
+                    },
+                    {
+                      "name": {
+                        "full": "Bijan Robinson",
+                        "first": "Bijan",
+                        "last": "Robinson",
+                        "ascii_first": "Bijan",
+                        "ascii_last": "Robinson"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/32671"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.32671"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.9"
+                    },
+                    {
+                      "editorial_team_full_name": "Atl Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "Atl"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "5"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "1"
+                    },
+                    {
+                      "display_position": "RB"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/32671.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/32671.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "RB"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "RB"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "2",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "4",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "2.1"
+                      },
+                      {
+                        "average_round": "1.2"
+                      },
+                      {
+                        "average_cost": "67.9"
+                      },
+                      {
+                        "percent_drafted": "1.0"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 100
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "RB"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "2": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.32721"
+                    },
+                    {
+                      "player_id": "32721"
+                    },
+                    {
+                      "name": {
+                        "full": "Jahmyr Gibbs",
+                        "first": "Jahmyr",
+                        "last": "Gibbs",
+                        "ascii_first": "Jahmyr",
+                        "ascii_last": "Gibbs"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/32721"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.32721"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.11"
+                    },
+                    {
+                      "editorial_team_full_name": "Det Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "Det"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "8"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "51"
+                    },
+                    {
+                      "display_position": "RB"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/32721.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/32721.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "RB"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "RB"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "4",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "6",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "4.2"
+                      },
+                      {
+                        "average_round": "1.4"
+                      },
+                      {
+                        "average_cost": "65.8"
+                      },
+                      {
+                        "percent_drafted": "1.0"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 100
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "RB"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "3": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.31883"
+                    },
+                    {
+                      "player_id": "31883"
+                    },
+                    {
+                      "name": {
+                        "full": "Ja'Marr Chase",
+                        "first": "Ja'Marr",
+                        "last": "Chase",
+                        "ascii_first": "JaMarr",
+                        "ascii_last": "Chase"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/31883"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.31883"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.29"
+                    },
+                    {
+                      "editorial_team_full_name": "Cin Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "Cin"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "10"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "5"
+                    },
+                    {
+                      "display_position": "WR"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/31883.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/31883.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "WR"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "WR"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "1",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "3",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "1.4"
+                      },
+                      {
+                        "average_round": "1.1"
+                      },
+                      {
+                        "average_cost": "68.6"
+                      },
+                      {
+                        "percent_drafted": "1.0"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 100
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "WR"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "4": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.30977"
+                    },
+                    {
+                      "player_id": "30977"
+                    },
+                    {
+                      "name": {
+                        "full": "Justin Jefferson",
+                        "first": "Justin",
+                        "last": "Jefferson",
+                        "ascii_first": "Justin",
+                        "ascii_last": "Jefferson"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/30977"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.30977"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.11"
+                    },
+                    {
+                      "editorial_team_full_name": "Min Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "Min"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "6"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "89"
+                    },
+                    {
+                      "display_position": "WR"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/30977.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/30977.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "WR"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "WR"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "3",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "5",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "3.3"
+                      },
+                      {
+                        "average_round": "1.3"
+                      },
+                      {
+                        "average_cost": "66.7"
+                      },
+                      {
+                        "percent_drafted": "1.0"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 100
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "WR"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "5": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.33396"
+                    },
+                    {
+                      "player_id": "33396"
+                    },
+                    {
+                      "name": {
+                        "full": "Brock Bowers",
+                        "first": "Brock",
+                        "last": "Bowers",
+                        "ascii_first": "Brock",
+                        "ascii_last": "Bowers"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/33396"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.33396"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.3"
+                    },
+                    {
+                      "editorial_team_full_name": "LV Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "LV"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "8"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "33"
+                    },
+                    {
+                      "display_position": "TE"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/33396.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/33396.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "TE"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "TE"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "12",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "14",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "12.5"
+                      },
+                      {
+                        "average_round": "2.0"
+                      },
+                      {
+                        "average_cost": "57.5"
+                      },
+                      {
+                        "percent_drafted": "0.99"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 99
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "TE"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "6": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.32725"
+                    },
+                    {
+                      "player_id": "32725"
+                    },
+                    {
+                      "name": {
+                        "full": "De'Von Achane",
+                        "first": "De'Von",
+                        "last": "Achane",
+                        "ascii_first": "DeVon",
+                        "ascii_last": "Achane"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/32725"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.32725"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.25"
+                    },
+                    {
+                      "editorial_team_full_name": "Mia Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "Mia"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "12"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "55"
+                    },
+                    {
+                      "display_position": "RB"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/32725.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/32725.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "RB"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "RB"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "11",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "13",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "11.2"
+                      },
+                      {
+                        "average_round": "1.9"
+                      },
+                      {
+                        "average_cost": "58.8"
+                      },
+                      {
+                        "percent_drafted": "0.98"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 98
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "W/R/T"
+                      },
+                      {
+                        "is_flex": 1
+                      }
+                    ]
+                  }
+                ]
+              },
+              "7": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.100026"
+                    },
+                    {
+                      "player_id": "100026"
+                    },
+                    {
+                      "name": {
+                        "full": "San Francisco",
+                        "first": "San Francisco",
+                        "last": "",
+                        "ascii_first": "San Francisco",
+                        "ascii_last": ""
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/100026"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.100026"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.20"
+                    },
+                    {
+                      "editorial_team_full_name": "SF Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "SF"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "14"
+                      }
+                    },
+                    [],
+                    {
+                      "uniform_number": "36"
+                    },
+                    {
+                      "display_position": "DEF"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/100026.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/100026.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "DT"
+                    },
+                    {
+                      "primary_position": "DEF"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "DEF"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "145",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "147",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "145.0"
+                      },
+                      {
+                        "average_round": "13.1"
+                      },
+                      {
+                        "average_cost": "1.0"
+                      },
+                      {
+                        "percent_drafted": "0.68"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 68
+                      },
+                      {
+                        "delta": "-1"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "DEF"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "8": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.33393"
+                    },
+                    {
+                      "player_id": "33393"
+                    },
+                    {
+                      "name": {
+                        "full": "Malik Nabers",
+                        "first": "Malik",
+                        "last": "Nabers",
+                        "ascii_first": "Malik",
+                        "ascii_last": "Nabers"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/33393"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.33393"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.20"
+                    },
+                    {
+                      "editorial_team_full_name": "NYG Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "NYG"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "14"
+                      }
+                    },
+                    {
+                      "status": "Q"
+                    },
+                    {
+                      "status_full": "Questionable"
+                    },
+                    {
+                      "injury_note": "Hamstring"
+                    },
+                    [],
+                    {
+                      "uniform_number": "30"
+                    },
+                    {
+                      "display_position": "WR"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/33393.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/33393.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "WR"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "WR"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "5",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "7",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "5.8"
+                      },
+                      {
+                        "average_round": "1.5"
+                      },
+                      {
+                        "average_cost": "64.2"
+                      },
+                      {
+                        "percent_drafted": "0.99"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 99
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "BN"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "9": {
+                "player": [
+                  [
+                    {
+                      "player_key": "449.p.31893"
+                    },
+                    {
+                      "player_id": "31893"
+                    },
+                    {
+                      "name": {
+                        "full": "Nico Collins",
+                        "first": "Nico",
+                        "last": "Collins",
+                        "ascii_first": "Nico",
+                        "ascii_last": "Collins"
+                      }
+                    },
+                    {
+                      "url": "https://sports.yahoo.com/nfl/players/31893"
+                    },
+                    {
+                      "editorial_player_key": "nfl.p.31893"
+                    },
+                    {
+                      "editorial_team_key": "nfl.t.15"
+                    },
+                    {
+                      "editorial_team_full_name": "Hou Franchise"
+                    },
+                    {
+                      "editorial_team_abbr": "Hou"
+                    },
+                    {
+                      "bye_weeks": {
+                        "week": "6"
+                      }
+                    },
+                    {
+                      "status": "O"
+                    },
+                    {
+                      "status_full": "Out"
+                    },
+                    {
+                      "injury_note": "Hamstring"
+                    },
+                    {
+                      "on_disabled_list": "1"
+                    },
+                    [],
+                    {
+                      "uniform_number": "15"
+                    },
+                    {
+                      "display_position": "WR"
+                    },
+                    {
+                      "headshot": {
+                        "url": "https://s.yimg.com/p/31893.png",
+                        "size": "small"
+                      }
+                    },
+                    {
+                      "image_url": "https://s.yimg.com/p/31893.png"
+                    },
+                    {
+                      "is_undroppable": "0"
+                    },
+                    {
+                      "position_type": "O"
+                    },
+                    {
+                      "primary_position": "WR"
+                    },
+                    {
+                      "eligible_positions": [
+                        {
+                          "position": "WR"
+                        },
+                        {
+                          "position": "W/R/T"
+                        }
+                      ]
+                    },
+                    {
+                      "has_player_notes": 1
+                    },
+                    {
+                      "player_notes_last_timestamp": 1757548800
+                    }
+                  ],
+                  {
+                    "player_ranks": [
+                      {
+                        "player_rank": {
+                          "rank_type": "PR",
+                          "rank_value": "21",
+                          "rank_season": "2026"
+                        }
+                      },
+                      {
+                        "player_rank": {
+                          "rank_type": "PS",
+                          "rank_value": "23",
+                          "rank_season": "2026"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "draft_analysis": [
+                      {
+                        "average_pick": "21.5"
+                      },
+                      {
+                        "average_round": "2.8"
+                      },
+                      {
+                        "average_cost": "48.5"
+                      },
+                      {
+                        "percent_drafted": "0.95"
+                      }
+                    ]
+                  },
+                  {
+                    "percent_owned": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "value": 95
+                      },
+                      {
+                        "delta": "0"
+                      }
+                    ]
+                  },
+                  {
+                    "selected_position": [
+                      {
+                        "coverage_type": "week",
+                        "week": "1"
+                      },
+                      {
+                        "position": "IR"
+                      },
+                      {
+                        "is_flex": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "count": 10
+            }
+          }
+        }
+      }
+    ],
+    "time": "82.35205078125ms",
+    "copyright": "Data provided by Yahoo! and STATS, LLC",
+    "refresh_rate": "60"
+  }
+}

@@ -1,0 +1,396 @@
+{
+  "fantasy_content": {
+    "xml:lang": "en-US",
+    "yahoo:uri": "/fantasy/v2/league/449.l.987654/settings",
+    "league": [
+      {
+        "league_key": "449.l.987654",
+        "league_id": "987654",
+        "name": "Work League",
+        "url": "https://football.fantasysports.yahoo.com/f1/987654",
+        "logo_url": "",
+        "draft_status": "predraft",
+        "num_teams": 10,
+        "edit_key": "1",
+        "weekly_deadline": "",
+        "league_update_timestamp": "1757548800",
+        "scoring_type": "head",
+        "league_type": "private",
+        "renew": "",
+        "renewed": "",
+        "iris_group_chat_id": "",
+        "allow_add_to_dl_extra_pos": 0,
+        "is_pro_league": "0",
+        "is_cash_league": "0",
+        "current_week": 1,
+        "start_week": "1",
+        "start_date": "2026-09-10",
+        "end_week": "17",
+        "end_date": "2026-12-28",
+        "is_plus_league": "0",
+        "game_code": "nfl",
+        "season": "2026"
+      },
+      {
+        "settings": [
+          {
+            "draft_type": "auction",
+            "is_auction_draft": "1",
+            "scoring_type": "head",
+            "persistent_url": "",
+            "uses_playoff": "1",
+            "has_playoff_consolation_games": true,
+            "playoff_start_week": "15",
+            "uses_playoff_reseeding": 0,
+            "uses_lock_eliminated_teams": 0,
+            "num_playoff_teams": "4",
+            "num_playoff_consolation_teams": 4,
+            "has_multiweek_championship": 0,
+            "waiver_type": "R",
+            "waiver_rule": "gametime",
+            "uses_faab": "0",
+            "draft_time": "1756843200",
+            "post_draft_players": "W",
+            "max_teams": "10",
+            "waiver_time": "1",
+            "trade_end_date": "2026-11-27",
+            "trade_ratify_type": "commish",
+            "trade_reject_time": "2",
+            "player_pool": "ALL",
+            "cant_cut_list": "yahoo",
+            "roster_positions": [
+              {
+                "roster_position": {
+                  "position": "QB",
+                  "position_type": "O",
+                  "count": 1
+                }
+              },
+              {
+                "roster_position": {
+                  "position": "RB",
+                  "position_type": "O",
+                  "count": 2
+                }
+              },
+              {
+                "roster_position": {
+                  "position": "WR",
+                  "position_type": "O",
+                  "count": 3
+                }
+              },
+              {
+                "roster_position": {
+                  "position": "TE",
+                  "position_type": "O",
+                  "count": 1
+                }
+              },
+              {
+                "roster_position": {
+                  "position": "Q/W/R/T",
+                  "position_type": "O",
+                  "count": 1
+                }
+              },
+              {
+                "roster_position": {
+                  "position": "K",
+                  "position_type": "K",
+                  "count": 1
+                }
+              },
+              {
+                "roster_position": {
+                  "position": "DEF",
+                  "position_type": "DT",
+                  "count": 1
+                }
+              },
+              {
+                "roster_position": {
+                  "position": "BN",
+                  "position_type": "",
+                  "count": 7
+                }
+              }
+            ],
+            "stat_categories": {
+              "stats": [
+                {
+                  "stat": {
+                    "stat_id": 4,
+                    "enabled": "1",
+                    "name": "Passing Yards",
+                    "display_name": "Pass Yds",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 5,
+                    "enabled": "1",
+                    "name": "Passing Touchdowns",
+                    "display_name": "Pass TD",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 6,
+                    "enabled": "1",
+                    "name": "Interceptions",
+                    "display_name": "Int",
+                    "sort_order": "0",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 9,
+                    "enabled": "1",
+                    "name": "Rushing Yards",
+                    "display_name": "Rush Yds",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 10,
+                    "enabled": "1",
+                    "name": "Rushing Touchdowns",
+                    "display_name": "Rush TD",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 11,
+                    "enabled": "1",
+                    "name": "Receptions",
+                    "display_name": "Rec",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 12,
+                    "enabled": "1",
+                    "name": "Reception Yards",
+                    "display_name": "Rec Yds",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 13,
+                    "enabled": "1",
+                    "name": "Reception Touchdowns",
+                    "display_name": "Rec TD",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 15,
+                    "enabled": "1",
+                    "name": "Return Touchdowns",
+                    "display_name": "Ret TD",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 16,
+                    "enabled": "1",
+                    "name": "2-Point Conversions",
+                    "display_name": "2-PT",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 18,
+                    "enabled": "1",
+                    "name": "Fumbles Lost",
+                    "display_name": "Fum Lost",
+                    "sort_order": "0",
+                    "position_types": [
+                      {
+                        "position_type": "O"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 19,
+                    "enabled": "1",
+                    "name": "Field Goals 0-19 Yards",
+                    "display_name": "FG 0-19",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "K"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 57,
+                    "enabled": "1",
+                    "name": "Points Allowed 0 points",
+                    "display_name": "Pts Allow 0",
+                    "sort_order": "1",
+                    "position_types": [
+                      {
+                        "position_type": "DT"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "stat_modifiers": {
+              "stats": [
+                {
+                  "stat": {
+                    "stat_id": 4,
+                    "value": "0.04"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 5,
+                    "value": "4"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 6,
+                    "value": "-1"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 9,
+                    "value": "0.1"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 10,
+                    "value": "6"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 11,
+                    "value": "1"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 12,
+                    "value": "0.1"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 13,
+                    "value": "6"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 15,
+                    "value": "6"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 16,
+                    "value": "2"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 18,
+                    "value": "-2"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 19,
+                    "value": "3"
+                  }
+                },
+                {
+                  "stat": {
+                    "stat_id": 98,
+                    "value": "5"
+                  }
+                }
+              ]
+            },
+            "uses_negative_points": "1"
+          }
+        ]
+      }
+    ],
+    "time": "82.35205078125ms",
+    "copyright": "Data provided by Yahoo! and STATS, LLC",
+    "refresh_rate": "60"
+  }
+}
