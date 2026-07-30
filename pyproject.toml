@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fantasy-coach"
 version = "0.1.0"
-description = "Season-long AI Fantasy Football assistant coach (Yahoo). M1: auth / OAuth 2.0 + token store. M2: Yahoo Fantasy read client."
+description = "Season-long AI Fantasy Football assistant coach (Yahoo). M1: auth / OAuth 2.0 + token store. M2: Yahoo Fantasy read client. M3: data ingestion + id crosswalk + external feeds."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -16,10 +16,20 @@ dependencies = [
     "python-dotenv>=1.0",
     "typer>=0.12",
     "rich>=13.7",
+    # M3 data layer (framework §2.2, §3):
+    "rapidfuzz>=3.0",   # fuzzy (name,pos,team) fallback in the id resolver
+    "pandas>=2.0",      # nflverse DataFrames -> the id-map loader
+    "numpy>=1.26",      # pandas numeric core
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# The live nflverse backbone. Installing this extra normally FAILS on Python
+# 3.13/3.14 because nfl_data_py 0.3.3 pins numpy<2.0 / pandas<2.0 (no wheels ->
+# source build fails). Install it manually instead:
+#   pip install --no-deps nfl_data_py && pip install appdirs fastparquet
+# M3 imports it lazily + injectably, so this is optional and tests never need it.
+nflverse = ["nfl_data_py>=0.3.1", "appdirs>=1.4", "fastparquet>=2024.2"]
 
 [project.scripts]
 fantasy-coach = "fantasy_coach.cli:main"

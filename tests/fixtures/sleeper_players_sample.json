@@ -1,0 +1,37 @@
+{
+  "11560": {
+    "player_id": "11560",
+    "full_name": "Caleb Williams",
+    "position": "QB",
+    "team": "CHI",
+    "yahoo_id": 40155,
+    "gsis_id": "00-0039918",
+    "espn_id": 4431611,
+    "rotowire_id": 17500
+  },
+  "8151": {
+    "player_id": "8151",
+    "full_name": "Kenneth Walker",
+    "position": "RB",
+    "team": "SEA",
+    "yahoo_id": 34123,
+    "gsis_id": "00-0037746",
+    "espn_id": 4567048
+  },
+  "4046": {
+    "player_id": "4046",
+    "full_name": "Patrick Mahomes",
+    "position": "QB",
+    "team": "KC",
+    "yahoo_id": 30123,
+    "gsis_id": "00-0033873"
+  },
+  "99999": {
+    "player_id": "99999",
+    "full_name": "Some Practicesquad Guy",
+    "position": "WR",
+    "team": "FA",
+    "yahoo_id": null,
+    "gsis_id": null
+  }
+}

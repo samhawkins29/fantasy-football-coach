@@ -96,6 +96,56 @@ class FakeClock:
         return sum(self.sleeps)
 
 
+# -- M3 helpers --------------------------------------------------------------
+
+
+def make_identity(
+    *,
+    yahoo_player_id: str,
+    full_name: str = "",
+    team_abbr: str = "",
+    position: str = "",
+    position_type: str = "",
+    bye_week=None,
+    status: str = "",
+    first_name: str = "",
+    last_name: str = "",
+):
+    """Build a :class:`PlayerIdentity` for resolver/index tests.
+
+    Kept out of the source models' import chain so a test only needs this one
+    helper. Mirrors what ``Player.identity()`` produces in M2.
+    """
+    from fantasy_coach.clients.models import PlayerIdentity
+
+    return PlayerIdentity(
+        yahoo_player_id=yahoo_player_id,
+        yahoo_player_key=f"449.p.{yahoo_player_id}" if yahoo_player_id else "",
+        full_name=full_name,
+        first_name=first_name,
+        last_name=last_name,
+        team_abbr=team_abbr,
+        position=position,
+        position_type=position_type,
+        bye_week=bye_week,
+        status=status,
+    )
+
+
+@pytest.fixture
+def id_map_rows() -> list[dict]:
+    """The recorded id-map sample (import_ids()-shaped records)."""
+    return load_fixture("id_map_sample")
+
+
+@pytest.fixture
+def crosswalk(id_map_rows):
+    """An :class:`IdCrosswalk` built offline from the id-map fixture."""
+    from fantasy_coach.ingest.crosswalk import load_id_crosswalk
+
+    return load_id_crosswalk(rows=id_map_rows)
+
+
 @pytest.fixture
 def authed_factory(token_store: TokenStore, fresh_token: Token):
     """Return ``make(handler) -> AuthedClient`` backed by a stored fresh token.

@@ -1,12 +1,12 @@
-# Fantasy Coach — M1 (Auth / OAuth 2.0 + token store) and M2 (Yahoo Fantasy read
-# client) runtime + test deps. M2 added no new dependencies: it is built on the
-# httpx client M1 already owns, plus the standard library.
+# Fantasy Coach — M1 (Auth / OAuth 2.0 + token store), M2 (Yahoo Fantasy read
+# client), and M3 (data ingestion + id crosswalk + external feeds) runtime + test
+# deps. M2 added no new dependencies; M3 adds the data-layer stack below.
 # Version strings are lower bounds ("known-good floor"), not exact pins —
 # the framework flags version facts as [verify at setup]. Pin exactly before
 # a production/draft-day freeze.
 
 # --- HTTP ---
-httpx>=0.27,<1.0            # owns the Yahoo token dance, the authed session, and the M2 read client
+httpx>=0.27,<1.0            # Yahoo token dance + authed session + M2 read client + M3 Sleeper source
 
 # --- OAuth 2.0 ---
 requests-oauthlib>=2.0      # pure authorization-URL + state generation (no network in our usage)
@@ -17,6 +17,32 @@ python-dotenv>=1.0          # load .env into the environment (secrets stay out o
 # --- CLI / UX ---
 typer>=0.12                 # `login` / `status` / `logout` commands
 rich>=13.7                  # pretty token-status tables (pulled in by typer too)
+
+# --- M3: data layer (framework §2.2, §3) ---
+rapidfuzz>=3.0              # fuzzy (name,pos,team) fallback in the id resolver — core M3
+pandas>=2.0                 # nflverse returns DataFrames; the id-map loader consumes them
+numpy>=1.26                 # pandas' numeric core (explicit so the floor is visible)
+
+# --- M3: nflverse backbone (nfl_data_py) — see NOTE below, intentionally NOT a
+# hard requirement here so `pip install -r requirements.txt` stays green. -------
+# NOTE (install gotcha, verified 2026-07): nfl_data_py 0.3.3 hard-pins
+#   numpy<2.0 and pandas<2.0. Those have no wheels for Python 3.13/3.14, so a
+#   plain `pip install nfl_data_py` tries to BUILD old pandas from source and
+#   FAILS on modern interpreters. The pins are stale — the actual code
+#   (import_ids / import_weekly_data / import_schedules …) runs fine against
+#   pandas 3 / numpy 2.5. So install it WITHOUT its dependency resolver:
+#
+#     pip install --no-deps nfl_data_py
+#     pip install appdirs fastparquet          # its real runtime deps
+#
+# M3 imports nfl_data_py *lazily* and all its fetchers are injectable, so the
+# whole package imports and the entire test suite passes WITHOUT it installed
+# (tests use fixtures). Only the live nflverse pull needs it. If it can't be
+# installed in a given environment, the NflverseSource interface is still wired
+# and the rest of M3 (crosswalk from fixtures, resolver, Sleeper, index) works.
+#
+# appdirs>=1.4              # nfl_data_py runtime dep (cache dir); install alongside
+# fastparquet>=2024.2       # nfl_data_py parquet reader; install alongside
 
 # --- Tests (kept here so `pip install -r requirements.txt && pytest` just works) ---
 pytest>=8.0
