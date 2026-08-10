@@ -20,7 +20,8 @@ Tier cliffs ride along from the M4 board: an available player who is the *last
 of their tier* at the position is flagged with the size of the drop to the next
 tier — the §4.2 "reach for the cliff" pressure signal — and the recommendation
 narrates every factor (value, need, cliff, ADP fall, playoff schedule, bye
-stacking) so the founder can trust the pick at a glance.
+stacking, injury status / durability risk) so the founder can trust the pick
+at a glance.
 
 Step-5 additions, both nudges by design:
 
@@ -247,6 +248,11 @@ class RankedPlayer:
             "draft_value": e.rank_value,
             "playoff_vorp": e.playoff_vorp,
             "schedule_note": e.schedule_note,
+            "injury_status": e.injury_status,
+            "injury_detail": e.injury_detail,
+            "durability_risk": e.durability_risk,
+            "injury_discount": e.injury_discount,
+            "injury_note": e.injury_note,
             "adp": e.adp,
             "tier": e.tier,
             "pos_rank": e.pos_rank,
@@ -361,6 +367,8 @@ def build_recommendation(
         )
     if e.schedule_note:
         reasons.append(e.schedule_note[0].upper() + e.schedule_note[1:])
+    if e.injury_note:
+        reasons.append(e.injury_note[0].upper() + e.injury_note[1:])
     if best.bye_overlap > BYE_STACK_FREE and e.bye_week is not None:
         reasons.append(
             f"Bye {e.bye_week} already shared by {best.bye_overlap} of your "

@@ -8,6 +8,11 @@ Commands:
     draft    The live draft companion (M5) — poll the draft room, serve the
              recommendation board at http://localhost:<port>. ``--simulate``
              replays a scripted draft offline through the identical loop.
+    refresh  Pull the latest of everything against the most up-to-date sources
+             (projections, schedule, durability, Sleeper + Yahoo injury
+             status, ADP), rebuild the board, and report data vintage — run
+             it right before the draft.
+    vintage  Show how fresh every stored data slice is. No network.
 
 Run ``python -m fantasy_coach --help`` for usage.
 
@@ -249,6 +254,16 @@ def draft(
         "w*playoff strength. Default -1 = use PLAYOFF_EMPHASIS from .env "
         "(0.0 = off, pure season value).",
     ),
+    injury_weight: float = typer.Option(
+        -1.0, "--injury-weight", min=-1.0, max=1.0,
+        help="Injury/durability discount weight in [0,1]: 0 = flags only "
+        "(ranking unchanged), 1 = full documented discounts. Default -1 = "
+        "use INJURY_EMPHASIS from .env (0.0 = off).",
+    ),
+    status_interval: float = typer.Option(
+        120.0, "--status-interval", min=15.0,
+        help="[live] Seconds between Sleeper injury-status re-checks.",
+    ),
     no_warm: bool = typer.Option(
         False, "--no-warm", help="[live] Skip the startup store-warm pass."
     ),
@@ -281,6 +296,7 @@ def draft(
     config = Config.load()
     store = CoachStore(config.db_path)
     weight = config.playoff_emphasis if playoff_weight < 0 else playoff_weight
+    inj_weight = config.injury_emphasis if injury_weight < 0 else injury_weight
 
     league_key = league.strip() or config.yahoo_league_key
     if not league_key:
@@ -298,11 +314,14 @@ def draft(
         loop = _build_sim_loop(
             store, config, league_key, team,
             sim_slot=sim_slot, sim_speed=sim_speed, playoff_weight=weight,
+            injury_weight=inj_weight,
         )
         poll_interval = poll or 1.5
     else:
         loop = _build_live_loop(
-            store, config, league_key, team, warm=not no_warm, playoff_weight=weight
+            store, config, league_key, team, warm=not no_warm,
+            playoff_weight=weight, injury_weight=inj_weight,
+            status_interval=status_interval,
         )
         poll_interval = poll or DRAFT_POLL_INTERVAL
     loop.poll_interval = poll_interval
@@ -316,7 +335,8 @@ def draft(
     console.print(
         f"[dim]mode={loop.mode} · league={loop.league_key} · "
         f"team={loop.state.my_team_key or 'unset'} · poll every {poll_interval}s · "
-        f"playoff emphasis {weight:g} · Ctrl+C to stop.[/]\n"
+        f"playoff emphasis {weight:g} · injury weight {inj_weight:g} · "
+        f"Ctrl+C to stop.[/]\n"
     )
     if not no_browser:
         try:
@@ -364,9 +384,231 @@ def _load_schedule(config: Config, *, refresh: bool):
         return None
 
 
+def _load_durability(config: Config, *, refresh: bool = False):
+    """Load durability profiles (step 6) — cache-first, degrade to ``None``.
+
+    Same contract as :func:`_load_schedule`: a refresh failure falls back to
+    the cache; no cache at all is a warning, never an error — the board simply
+    carries no durability signal.
+    """
+    from fantasy_coach.ingest.injury import DurabilitySource
+    from fantasy_coach.ingest.projections import default_season
+
+    season = default_season()
+    source = DurabilitySource(cache_dir=config.cache_dir)
+    if refresh:
+        try:
+            return source.warm_cache(season)
+        except Exception as exc:
+            console.print(
+                f"[yellow]durability refresh failed ({exc}); trying the cache…[/]"
+            )
+    try:
+        return source.load(season)
+    except Exception as exc:
+        console.print(
+            f"[yellow]No durability data available ({exc}) — board carries no "
+            "re-injury signal.[/]"
+        )
+        return None
+
+
+def _vintage_table(store, title: str) -> None:
+    """Print the store's data_vintage rows as a rich table."""
+    rows = store.vintage()
+    table = Table(title=title, title_style="bold", show_header=True)
+    table.add_column("Data scope")
+    table.add_column("Last refreshed (UTC)")
+    table.add_column("Detail", overflow="fold")
+    for row in rows:
+        table.add_row(row["scope"], row["refreshed_at"], row["detail"] or "")
+    if not rows:
+        table.add_row("[dim]— empty store —[/]", "", "")
+    console.print(table)
+
+
+@app.command()
+def vintage() -> None:
+    """Show how fresh every stored data slice is. No network calls."""
+    from fantasy_coach.store import CoachStore
+
+    config = Config.load()
+    with CoachStore(config.db_path) as store:
+        _vintage_table(store, f"Data vintage — {config.db_path}")
+    console.print(
+        "[dim]Live sources: Yahoo status (during the draft), Sleeper status "
+        "(re-pulled on refresh + every ~2 min in the live loop). Periodic: "
+        "nflverse projections/schedule/durability (refresh re-pulls them).[/]"
+    )
+
+
+@app.command()
+def refresh(
+    league: str = typer.Option(
+        "", "--league", "-l",
+        help="League key. Defaults to YAHOO_LEAGUE_KEY, then the store's only league.",
+    ),
+    skip_yahoo: bool = typer.Option(
+        False, "--skip-yahoo",
+        help="Skip the Yahoo pulls (no auth needed; Sleeper + nflverse still refresh).",
+    ),
+    max_yahoo_players: int = typer.Option(
+        300, "--max-yahoo-players",
+        help="How deep to re-pull Yahoo statuses/ADP (sorted by rank; 25/request).",
+    ),
+) -> None:
+    """Re-pull every risk-relevant source to its most up-to-date state.
+
+    The pre-draft freshness pass: re-warms nflverse projections, schedule and
+    durability caches, pulls current injury statuses from Sleeper (free, no
+    key) and — when authed — Yahoo statuses + ADP, rebuilds the value board,
+    and prints the before/after data vintage so stale slices are obvious.
+    Every step degrades to a warning; whatever cannot refresh keeps its prior
+    rows and its prior (visible) vintage.
+    """
+    from fantasy_coach.ingest.injury import (
+        InjuryReport,
+        SleeperStatusSource,
+        normalize_status,
+    )
+    from fantasy_coach.ingest.projections import NflverseProjectionSource, default_season
+    from fantasy_coach.ingest.schedule import ScheduleSource
+    from fantasy_coach.store import CoachStore, warm_store
+
+    config = Config.load()
+    store = CoachStore(config.db_path)
+    season = default_season()
+
+    league_key = league.strip() or config.yahoo_league_key
+    if not league_key:
+        rows = store.sql("SELECT league_key FROM league_settings")
+        league_key = rows[0]["league_key"] if len(rows) == 1 else ""
+
+    _vintage_table(store, "Before refresh")
+    warnings: list[str] = []
+
+    # 1. nflverse projections (periodic source — recomputed from latest data).
+    console.print(f"[dim]Refreshing projections for {season}…[/]")
+    projection_source = NflverseProjectionSource(cache_dir=config.cache_dir)
+    try:
+        projection_source.warm_cache(season)
+    except Exception as exc:
+        warnings.append(f"projections refresh failed ({exc}); cache/store rows kept")
+
+    # 2. nflverse schedule + SOS.
+    console.print("[dim]Refreshing schedule + opponent difficulty…[/]")
+    schedule = None
+    try:
+        schedule = ScheduleSource(cache_dir=config.cache_dir).warm_cache(season)
+        store.stamp_vintage(f"schedule:nflverse:{season}")
+    except Exception as exc:
+        warnings.append(f"schedule refresh failed ({exc}); trying prior cache")
+        schedule = _load_schedule(config, refresh=False)
+
+    # 3. nflverse durability (games missed + injury-report history).
+    console.print("[dim]Refreshing durability profiles…[/]")
+    durability = _load_durability(config, refresh=True)
+
+    # 4. Sleeper current injury status (live-ish: free, keyless, frequent).
+    console.print("[dim]Pulling current injury statuses from Sleeper…[/]")
+    try:
+        reports = SleeperStatusSource.for_players(store.canonical_players()).fetch()
+        written = store.upsert_injury_reports(reports, source="sleeper")
+        flagged = sum(1 for r in reports.values() if r.status)
+        console.print(
+            f"[dim]  {written} players checked · {flagged} carrying a designation[/]"
+        )
+    except Exception as exc:
+        warnings.append(f"Sleeper status pull failed ({exc}); prior reports kept")
+
+    # 5. Yahoo statuses + ADP (live during drafts; needs auth).
+    settings = store.league_settings(league_key) if league_key else None
+    if not skip_yahoo and config.has_oauth_credentials and league_key:
+        try:
+            from fantasy_coach.auth.session import get_authed_client
+            from fantasy_coach.clients.yahoo import YahooClient
+
+            yahoo = YahooClient(get_authed_client(config))
+            console.print(f"[dim]Refreshing Yahoo settings/status/ADP for {league_key}…[/]")
+            settings = yahoo.get_league_settings(league_key)
+            players = yahoo.get_players(
+                league_key,
+                sort="OR",
+                out=("draft_analysis",),
+                max_players=max_yahoo_players,
+            )
+            by_yahoo = {
+                row["yahoo_id"]: row["canonical_id"]
+                for row in store.sql(
+                    "SELECT yahoo_id, canonical_id FROM players WHERE yahoo_id IS NOT NULL"
+                )
+            }
+            yahoo_reports: dict[str, InjuryReport] = {}
+            adp_rows = []
+            for p in players:
+                cid = by_yahoo.get(p.player_id)
+                if cid is None:
+                    continue
+                yahoo_reports[cid] = InjuryReport(
+                    source="yahoo",
+                    status=normalize_status(p.status),
+                    raw_status=p.status,
+                    detail=p.injury_note,
+                )
+                if p.average_draft_pick is not None:
+                    adp_rows.append(
+                        {"canonical_id": cid, "average_pick": p.average_draft_pick}
+                    )
+            store.upsert_injury_reports(yahoo_reports, source="yahoo")
+            if adp_rows:
+                store.upsert_adp(adp_rows, source="yahoo")
+            console.print(
+                f"[dim]  {len(yahoo_reports)} statuses · {len(adp_rows)} ADP rows updated[/]"
+            )
+        except Exception as exc:
+            warnings.append(f"Yahoo refresh failed ({exc}); prior statuses/ADP kept")
+    elif not skip_yahoo:
+        warnings.append(
+            "Yahoo skipped (no OAuth credentials or league key) — its statuses "
+            "refresh live during the draft anyway"
+        )
+
+    # 6. Rebuild the board from the refreshed store.
+    if settings is not None:
+        result = warm_store(
+            store,
+            settings,
+            projection_source=projection_source,
+            schedule=schedule,
+            playoff_weight=config.playoff_emphasis,
+            durability=durability,
+            injury_weight=config.injury_emphasis,
+        )
+        console.print("[dim]" + result.summary() + "[/]")
+        warnings.extend(result.warnings)
+    else:
+        warnings.append(
+            "no league settings (stored or from Yahoo) — caches refreshed but "
+            "the board was not rebuilt"
+        )
+
+    _vintage_table(store, "After refresh")
+    for warning in warnings:
+        console.print(f"[yellow]WARNING:[/] {warning}")
+    console.print(
+        "\n[dim]Source freshness, honestly: Yahoo status is live while the "
+        "draft loop polls; Sleeper status is frequently updated and was just "
+        "re-pulled; nflverse projections/schedule/durability are periodic "
+        "datasets — 'refreshed' means recomputed from their latest publish, "
+        "not real-time.[/]"
+    )
+    store.close()
+
+
 def _build_sim_loop(
     store, config: Config, league_key: str, team: str,
     *, sim_slot: int, sim_speed: int, playoff_weight: float,
+    injury_weight: float = 0.0,
 ):
     """Wire the offline simulation loop: stored settings + scripted picks."""
     from fantasy_coach.draft import DraftLoop, SimulatedPickSource, script_draft, sim_team_names
@@ -396,17 +638,20 @@ def _build_sim_loop(
         record_to_store=False,  # never write sim picks over a real league's table
         schedule=_load_schedule(config, refresh=False),
         playoff_weight=playoff_weight,
+        injury_weight=injury_weight,  # flags/discounts from stored reports only
     )
 
 
 def _build_live_loop(
     store, config: Config, league_key: str, team: str,
-    *, warm: bool, playoff_weight: float,
+    *, warm: bool, playoff_weight: float, injury_weight: float = 0.0,
+    status_interval: float = 120.0,
 ):
     """Wire the live loop: authed Yahoo client, settings, keepers, warm pass."""
     from fantasy_coach.auth.session import get_authed_client
     from fantasy_coach.clients.yahoo import YahooClient
     from fantasy_coach.draft import DraftLoop, YahooPickSource
+    from fantasy_coach.ingest.injury import SleeperStatusSource
     from fantasy_coach.ingest.projections import NflverseProjectionSource
     from fantasy_coach.store import warm_store
 
@@ -427,8 +672,12 @@ def _build_live_loop(
             projection_source=NflverseProjectionSource(cache_dir=config.cache_dir),
             schedule=schedule,
             playoff_weight=playoff_weight,
+            durability=_load_durability(config),
+            injury_weight=injury_weight,
         )
         console.print("[dim]" + result.summary() + "[/]")
+
+    status_source = SleeperStatusSource.for_players(store.canonical_players())
 
     teams = yahoo.get_league_teams(league_key)
     team_names = {t.team_key: t.name for t in teams}
@@ -455,6 +704,9 @@ def _build_live_loop(
         team_names=team_names,
         schedule=schedule,
         playoff_weight=playoff_weight,
+        status_source=status_source,
+        status_interval=status_interval,
+        injury_weight=injury_weight,
     )
 
     # Seed keepers / pre-rostered players so they are never recommended.

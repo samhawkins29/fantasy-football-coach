@@ -32,6 +32,15 @@ M4 §4.2, end to end:
    which **equals VORP exactly** when the schedule is absent or
    ``playoff_weight=0``, so the schedule layer is off-by-default-safe. Byes
    are filled from the schedule when the canonical layer lacks them.
+7. **Injury awareness** (step 6, optional): given a per-player risk index
+   (:func:`~fantasy_coach.value.injury.build_risk_index` — merged current
+   status + durability history), every entry is stamped with its status code,
+   durability flag, and a short honest note. With ``injury_weight > 0`` the
+   combined, clamped discount (:mod:`fantasy_coach.value.injury`) shades the
+   entry's **draft value** — never its raw VORP or its tier, which stay pure
+   talent measures. ``injury_weight=0`` keeps ordering bit-identical to the
+   pre-step-6 board (flags visible, ranking untouched) — off-by-default-safe,
+   same contract as the schedule layer.
 
 Everything is parameterized by the passed-in :class:`LeagueSettings` — different
 leagues produce different boards from the same projections. Joins run on the
@@ -42,7 +51,7 @@ canonical/gsis id via :class:`~fantasy_coach.ingest.canonical.CanonicalPlayer`
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from fantasy_coach.clients.models import BENCH_POSITIONS, LeagueSettings, RosterPosition
@@ -51,6 +60,7 @@ from fantasy_coach.ingest.names import normalize_position
 from fantasy_coach.ingest.projections import score_stats
 from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.ingest.sources import ProjectionRecord
+from fantasy_coach.value.injury import PlayerRisk, injury_note, total_discount
 from fantasy_coach.value.schedule import (
     blend_value,
     playoff_weeks,
@@ -102,6 +112,14 @@ class BoardEntry:
     the board ranks by (``None`` means "rank by ``vorp``" — the two are equal
     whenever the playoff emphasis is off), and ``schedule_note`` a short
     narration when the playoff schedule is notably soft/tough.
+
+    The injury fields (step 6) are stamped whenever a risk index was given:
+    ``injury_status`` the normalized current designation (``Q``/``O``/``IR``…,
+    empty = healthy), ``injury_detail`` the body part when known,
+    ``durability_risk`` the categorical games-missed flag,
+    ``injury_discount`` the fraction actually shaved off the draft value
+    (``None`` when nothing was shaded — including the whole board at
+    ``injury_weight=0``), and ``injury_note`` the honest one-line narration.
     """
 
     canonical_id: str
@@ -120,6 +138,11 @@ class BoardEntry:
     playoff_vorp: float | None = None
     draft_value: float | None = None
     schedule_note: str = ""
+    injury_status: str = ""
+    injury_detail: str = ""
+    durability_risk: str = ""
+    injury_discount: float | None = None
+    injury_note: str = ""
 
     @property
     def is_projection_based(self) -> bool:
@@ -147,6 +170,9 @@ class ValueBoard:
             (empty when the board was built without a schedule).
         playoff_weight: The blend weight ``w`` the draft values were built
             with (0.0 = pure season VORP — the pre-step-5 board).
+        injury_weight: The injury/durability discount weight the draft values
+            were built with (0.0 = risk flags only, no value shading — the
+            pre-step-6 ranking).
     """
 
     entries: list[BoardEntry] = field(default_factory=list)
@@ -156,6 +182,7 @@ class ValueBoard:
     skipped_no_signal: int = 0
     playoff_weeks: list[int] = field(default_factory=list)
     playoff_weight: float = 0.0
+    injury_weight: float = 0.0
 
     def top(self, n: int = 30) -> list[BoardEntry]:
         """The top ``n`` overall — the draft-board view."""
@@ -332,6 +359,8 @@ def build_value_board(
     players: Iterable[CanonicalPlayer] | None = None,
     schedule: SeasonSchedule | None = None,
     playoff_weight: float = 0.0,
+    risk: Mapping[str, PlayerRisk] | None = None,
+    injury_weight: float = 0.0,
     tier_gap_factor: float = 1.5,
     tier_min_gap: float = 10.0,
     tier_fixed_gap: float | None = None,
@@ -359,6 +388,14 @@ def build_value_board(
         playoff_weight: The blend weight ``w`` in ``(1−w)·VORP + w·annualized
             playoff VORP``. ``0.0`` (default) preserves pre-step-5 ranking even
             with a schedule present; ~``0.2–0.35`` is a meaningful playoff tilt.
+        risk: Optional per-player injury picture (step 6) —
+            ``{canonical_id: PlayerRisk}`` from
+            :func:`~fantasy_coach.value.injury.build_risk_index`. Enables the
+            status/durability stamps + notes on every matched entry.
+        injury_weight: How hard the combined injury discount shades draft
+            values. ``0.0`` (default) stamps flags but changes **no** value or
+            rank — the off-by-default-safe contract; ~``0.5–1.0`` applies a
+            half-to-full share of the documented discounts.
 
     Returns:
         A :class:`ValueBoard` sorted by draft value (== VORP when the playoff
@@ -480,6 +517,29 @@ def build_value_board(
             )
             e.schedule_note = schedule_note(e.position, e.team, schedule, pweeks)
 
+    # 7. Injury awareness (step 6): stamp flags always; shade draft value only
+    # when the injury weight is on. Raw VORP and tiers are never touched — a
+    # hurt player is the same talent, just a riskier bet.
+    if risk is not None:
+        applied_pw = playoff_weight if pweeks else 0.0
+        for e in entries:
+            r = risk.get(e.canonical_id)
+            if r is None:
+                continue
+            e.injury_status = r.status
+            e.injury_detail = r.report.detail if r.report is not None else ""
+            e.durability_risk = r.durability_risk
+            shaded_pct = None
+            if injury_weight > 0:
+                discount = injury_weight * total_discount(
+                    r, playoff_weight=applied_pw
+                )
+                if discount > 0 and e.rank_value > 0:
+                    e.injury_discount = round(discount, 3)
+                    e.draft_value = round(e.rank_value * (1.0 - discount), 2)
+                    shaded_pct = discount * 100.0
+            e.injury_note = injury_note(r, shaded_pct=shaded_pct)
+
     # Ranks: overall by draft value — identical to VORP order when the playoff
     # emphasis is off (ties → VORP, points, then name for determinism).
     entries.sort(key=lambda e: (-e.rank_value, -e.vorp, -(e.points or 0.0), e.name))
@@ -524,4 +584,5 @@ def build_value_board(
         skipped_no_signal=skipped,
         playoff_weeks=pweeks,
         playoff_weight=playoff_weight if schedule is not None else 0.0,
+        injury_weight=injury_weight if risk is not None else 0.0,
     )

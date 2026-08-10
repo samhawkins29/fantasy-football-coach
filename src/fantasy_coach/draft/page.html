@@ -113,6 +113,17 @@
   .pos.TE { background: var(--te); } .pos.K { background: var(--k); } .pos.DEF { background: var(--def); }
   .pos.unknown { background: var(--faint); }
 
+  /* ---------- injury / durability badges ---------- */
+  .inj {
+    font-size: .62rem; font-weight: 800; padding: 2px 6px; border-radius: 5px;
+    letter-spacing: .05em; white-space: nowrap;
+  }
+  .inj.Q { background: rgba(245,165,36,.16); color: var(--warn); border: 1px solid rgba(245,165,36,.4); }
+  .inj.D, .inj.SUS, .inj.NA { background: rgba(245,120,36,.16); color: #f57e24; border: 1px solid rgba(245,120,36,.45); }
+  .inj.O, .inj.IR, .inj.PUP, .inj.NFI { background: rgba(239,70,102,.16); color: var(--danger); border: 1px solid rgba(239,70,102,.4); }
+  .risk-badge { font-size: .62rem; font-weight: 700; color: var(--warn); white-space: nowrap; }
+  .risk-badge.elevated { color: var(--danger); }
+
   /* ---------- available table ---------- */
   table { width: 100%; border-collapse: collapse; font-size: .86rem; }
   thead th {
@@ -227,6 +238,7 @@
   <div class="foot">
     <span id="foot-counts"></span>
     <span id="foot-unmapped"></span>
+    <span id="foot-vintage" title="last refresh per data slice (UTC) — run `refresh` pre-draft to update"></span>
     <span>Auto-refreshes every 2s — leave this tab next to the Yahoo draft room.</span>
   </div>
 </div>
@@ -237,6 +249,16 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const posChip = (p) => `<span class="pos ${/^(QB|RB|WR|TE|K|DEF)$/.test(p) ? p : "unknown"}">${esc(p || "?")}</span>`;
 const fmt = (v, d=1) => (v === null || v === undefined) ? "—" : Number(v).toFixed(d);
+const injBadge = (p) => {
+  let out = "";
+  const note = p.injury_note || "";
+  if (p.injury_status)
+    out += ` <span class="inj ${esc(p.injury_status)}" title="${esc(note)}">${esc(p.injury_status)}</span>`;
+  if (p.durability_risk === "high" || p.durability_risk === "elevated")
+    out += ` <span class="risk-badge ${esc(p.durability_risk)}" title="${esc(note)}">⚕ ${esc(p.durability_risk)}</span>`;
+  return out;
+};
+const rowTitle = (p) => [p.schedule_note, p.injury_note].filter(Boolean).join(" · ");
 
 let lastFetchAt = null;     // performance.now() of last successful fetch
 let lastAge = null;         // server-reported age at fetch time
@@ -285,7 +307,23 @@ function render(s) {
     `${s.available_count ?? "—"} players still on the board · poll every ${fmt(s.poll_interval, 1)}s`;
   $("foot-unmapped").textContent = s.unmapped_count
     ? `⚠ ${s.unmapped_count} drafted id(s) unmapped (excluded by raw id)` : "";
+  renderVintage(s);
   prevPickCount = d.pick_count ?? prevPickCount;
+}
+
+function renderVintage(s) {
+  const latest = {};
+  for (const v of (s.vintage || [])) {
+    const key = v.scope.split(":")[0];
+    if (!latest[key] || v.refreshed_at > latest[key]) latest[key] = v.refreshed_at;
+  }
+  const parts = ["projections", "adp", "schedule", "durability", "injury_status"]
+    .filter(k => latest[k])
+    .map(k => `${k.replace("_", " ")} ${latest[k].slice(5, 16).replace("T", " ")}`);
+  const inj = s.injury || {};
+  if (inj.status_source)
+    parts.push(`${inj.status_source} status ${inj.status_poll_age === null || inj.status_poll_age === undefined ? "not yet checked" : "checked " + fmt(inj.status_poll_age, 0) + "s ago"}`);
+  $("foot-vintage").textContent = parts.length ? "data vintage: " + parts.join(" · ") : "";
 }
 
 function renderHero(s) {
@@ -299,12 +337,12 @@ function renderHero(s) {
   const po = s.playoff || {};
   const blended = po.weight > 0 && r.draft_value !== null && r.draft_value !== undefined;
   const runners = (s.runners_up || []).map(p => `
-    <div class="runner">${posChip(p.position)}<span>${esc(p.name)}</span>
+    <div class="runner">${posChip(p.position)}<span>${esc(p.name)}</span>${injBadge(p)}
       <span class="score">${fmt(p.score)}</span></div>`).join("");
   hero.innerHTML = `
     <div class="hero-main">
-      <div class="hero-eyebrow">Best pick now${po.weight > 0 ? ` · playoff emphasis ${fmt(po.weight, 2)}` : ""}</div>
-      <div class="hero-name">${esc(r.name)} ${posChip(r.position)}</div>
+      <div class="hero-eyebrow">Best pick now${po.weight > 0 ? ` · playoff emphasis ${fmt(po.weight, 2)}` : ""}${(s.injury || {}).weight > 0 ? ` · injury weight ${fmt(s.injury.weight, 2)}` : ""}</div>
+      <div class="hero-name">${esc(r.name)} ${posChip(r.position)}${injBadge(r)}</div>
       <div class="hero-sub">${esc(r.team || "")}${r.bye ? ` · bye ${esc(String(r.bye))}` : ""}
         · ${esc(r.position)}${esc(String(r.pos_rank))} · tier ${esc(String(r.tier))}</div>
       <div class="hero-stats">
@@ -336,9 +374,9 @@ function renderAvailable(s) {
   }
   goneRows = goneRows.filter(g => g.until > now);
   const body = rows.map((p, i) => `
-    <tr${p.schedule_note ? ` title="${esc(p.schedule_note)}"` : ""}>
+    <tr${rowTitle(p) ? ` title="${esc(rowTitle(p))}"` : ""}>
       <td class="sub">${i + 1}</td>
-      <td><span class="pname">${esc(p.name)}</span> <span class="sub">${esc(p.team || "")}${p.bye ? " · " + esc(String(p.bye)) : ""}${p.bye_overlap > 1 ? ` <span class="cliff-flag" title="bye shared with ${esc(String(p.bye_overlap))} of your starters">⚠bye</span>` : ""}</span></td>
+      <td><span class="pname">${esc(p.name)}</span>${injBadge(p)} <span class="sub">${esc(p.team || "")}${p.bye ? " · " + esc(String(p.bye)) : ""}${p.bye_overlap > 1 ? ` <span class="cliff-flag" title="bye shared with ${esc(String(p.bye_overlap))} of your starters">⚠bye</span>` : ""}</span></td>
       <td>${posChip(p.position)}</td>
       <td class="num">${p.vorp >= 0 ? "+" : ""}${fmt(p.vorp)}</td>
       ${po.weight > 0 ? `<td class="num">${p.draft_value >= 0 ? "+" : ""}${fmt(p.draft_value)}${p.schedule_note ? " ✦" : ""}</td>` : ""}

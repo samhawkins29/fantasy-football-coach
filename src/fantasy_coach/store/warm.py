@@ -1,7 +1,8 @@
 """``warm_store`` — populate the store for a league in one call (framework §7).
 
 The pre-draft warm cache, made durable: pull/settle every static input (league
-settings, canonical players, ADP, projections, stats history), compute the
+settings, canonical players, ADP, projections, stats history, injury statuses,
+durability profiles), compute the
 league's value board via :func:`~fantasy_coach.value.board.build_value_board`,
 and persist all of it into the queryable SQLite store. Run it once online
 before the draft; on draft day everything is served from the file with zero
@@ -56,10 +57,16 @@ from fantasy_coach.ingest.projections import (
     PROJECTION_NOTE,
     default_season,
 )
+from fantasy_coach.ingest.injury import (
+    DurabilityProfile,
+    InjuryReport,
+    normalize_status,
+)
 from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.ingest.sources import ProjectionRecord, ProjectionSource
 from fantasy_coach.store.store import CoachStore
 from fantasy_coach.value.board import build_value_board
+from fantasy_coach.value.injury import build_risk_index
 
 __all__ = ["WarmResult", "warm_store", "stats_rows_from_nflverse"]
 
@@ -209,6 +216,9 @@ def warm_store(
     adp_source: str = "yahoo",
     schedule: SeasonSchedule | None = None,
     playoff_weight: float = 0.0,
+    durability: Iterable[DurabilityProfile] | None = None,
+    injury_reports: Mapping[str, Mapping[str, InjuryReport]] | None = None,
+    injury_weight: float = 0.0,
 ) -> WarmResult:
     """Warm the store for one league: persist every input, then rebuild+store
     the value board. The one command of the load path.
@@ -236,6 +246,16 @@ def warm_store(
             data object here. ``None`` → a pure season board, as before.
         playoff_weight: Blend weight for the stored board's draft values
             (0.0 keeps the board identical to the pre-step-5 output).
+        durability: Optional per-player durability profiles (step 6) —
+            normally ``DurabilitySource.load(season)``, cache-served offline.
+            ``None`` → prior rows are kept.
+        injury_reports: Optional current designations by source,
+            ``{"sleeper": {canonical_id: report}, ...}``. Yahoo statuses need
+            no explicit entry — they are synthesized from ``players``'
+            ``status`` fields automatically whenever players are given.
+        injury_weight: How hard the injury/durability discount shades the
+            stored board's draft values (0.0 = flags only, ranking unchanged —
+            the step-6 off-by-default contract).
 
     Returns:
         A :class:`WarmResult` with per-table counts, refreshed scopes, and
@@ -297,6 +317,32 @@ def warm_store(
             "projections, keeping prior player/adp rows"
         )
 
+    # 3b. Injury status + durability (step 6). Yahoo statuses ride along on
+    #     the players themselves; other sources come in via injury_reports.
+    if players is not None:
+        yahoo_reports = {
+            p.canonical_id: InjuryReport(
+                source="yahoo",
+                status=normalize_status(p.status),
+                raw_status=p.status,
+            )
+            for p in players
+            if p.status
+        }
+        if yahoo_reports:
+            store.upsert_injury_reports(yahoo_reports, source="yahoo")
+            result.refreshed.append("injury_status:yahoo")
+    for src_name, reports in (injury_reports or {}).items():
+        if reports:
+            store.upsert_injury_reports(dict(reports), source=src_name)
+            result.refreshed.append(f"injury_status:{src_name}")
+    # ``durability=None`` keeps prior rows silently — the signal is an optional
+    # nudge, and the refresh path already surfaces its own load warnings.
+    if durability is not None:
+        written = store.upsert_durability(durability)
+        if written:
+            result.refreshed.append("durability")
+
     # 4. Stats history.
     if stats_rows is not None:
         shaped = stats_rows_from_nflverse(stats_rows)
@@ -311,6 +357,9 @@ def warm_store(
     #    identity rows, which keeps the ADP→VORP gap-fill working offline.
     if projections:
         board_players = store.canonical_players()
+        # Risk comes from the STORE too (same reason as ADP): a prior warm's
+        # Sleeper reports and durability rows survive an offline re-warm.
+        risk = build_risk_index(store.injury_reports(), store.durability_profiles())
         board = build_value_board(
             projections,
             settings,
@@ -318,6 +367,8 @@ def warm_store(
             players=board_players or None,
             schedule=schedule,
             playoff_weight=playoff_weight,
+            risk=risk or None,
+            injury_weight=injury_weight,
         )
         result.board_entries = store.replace_board(league_key, board)
         result.skipped_no_signal = board.skipped_no_signal

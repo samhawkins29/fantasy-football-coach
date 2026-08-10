@@ -135,6 +135,8 @@ test path — but the CLI needs the package installed.)
 | `python -m fantasy_coach config` | Shows which config values are set (secrets masked) and whether OAuth is ready. | None |
 | `python -m fantasy_coach draft --league <key>` | **The live draft companion (M5).** Polls the Yahoo draft room every ~2.5s, rebuilds the drafted set (undo-safe), recomputes the available VORP board with baselines that shift as pools drain, weights it by your unfilled roster slots, and serves an auto-refreshing dark board page at `http://localhost:8787`. Auto-detects your team; seeds keepers from pre-draft rosters. | Polls `draftresults` (throttled) |
 | `python -m fantasy_coach draft --simulate` | The identical loop fed by a scripted snake draft generated from the stored board — the full offline dress rehearsal (page, roster fill, recommendations). `--sim-slot N` picks your slot, `--sim-speed K` reveals K picks per poll. | None |
+| `python -m fantasy_coach refresh` | **The pre-draft freshness pass (step 6).** Re-pulls everything to its most up-to-date state: nflverse projections/schedule/durability caches, current injury statuses from Sleeper (free, no key) and — when authed — Yahoo statuses + ADP; rebuilds the board; prints before/after data vintage. Every step degrades to a warning. `--skip-yahoo` works without auth. | nflverse + Sleeper (+ Yahoo unless skipped) |
+| `python -m fantasy_coach vintage` | Shows how fresh every stored data slice is (per-source refresh timestamps), and which sources are truly live vs periodic. | None |
 
 ---
 
@@ -153,6 +155,8 @@ Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored):
 | `ODDS_API_KEY` | No | The Odds API key (later modules). |
 | `FANTASYPROS_API_KEY` | No | FantasyPros API key (later modules). |
 | `PROJECTION_SOURCE` | No | Which projection source the value engine uses: `nflverse` (free, default — the model in `ingest/projections.py`) or `fantasypros` (needs `FANTASYPROS_API_KEY`). |
+| `PLAYOFF_EMPHASIS` | No | Playoff blend weight `w` in [0,1] (step 5): draft value = `(1−w)·season VORP + w·playoff strength`. Default `0` (pure season value). |
+| `INJURY_EMPHASIS` | No | Injury/durability discount weight in [0,1] (step 6). Default `0`: risk flags are shown but values/ranks never move; `0.5–1.0` shades Out/IR/Questionable players and chronic games-missers down by the documented, clamped discounts. |
 | `FANTASY_COACH_CACHE_DIR` | No | Local data-cache directory (season projection caches). Default `.cache` (git-ignored). |
 
 ### Season projections (free, nflverse-based)

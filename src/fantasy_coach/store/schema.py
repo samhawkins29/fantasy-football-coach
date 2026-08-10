@@ -31,6 +31,10 @@ Schema map (what each table is *for*):
   players" query excludes them).
 * ``data_vintage`` — one refresh timestamp per data scope, so the founder
   always knows how fresh each slice is.
+* ``injury_reports`` — the latest injury designation per (player, source)
+  (Yahoo live / Sleeper), merged at read time; every row keeps its vintage.
+* ``durability`` — per-player games-missed history + the clamped availability
+  discount and categorical risk flag (a labelled model estimate).
 """
 
 from __future__ import annotations
@@ -209,6 +213,46 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         "ALTER TABLE value_board ADD COLUMN schedule_note TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE board_meta ADD COLUMN playoff_weight REAL NOT NULL DEFAULT 0",
         "ALTER TABLE board_meta ADD COLUMN playoff_weeks TEXT NOT NULL DEFAULT '[]'",
+    ),
+    # -- v3: injury/durability risk (step 6) ----------------------------------
+    # ``injury_reports`` keeps the latest designation *per source* so the merge
+    # (fresh beats stale, severe beats mild) can re-run at read time and every
+    # source's vintage stays independently visible. ``durability`` is one row
+    # per player — the transparent games-missed signal + clamped discount.
+    (
+        "ALTER TABLE value_board ADD COLUMN injury_status TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE value_board ADD COLUMN durability_risk TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE value_board ADD COLUMN injury_note TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE value_board ADD COLUMN injury_discount REAL",
+        "ALTER TABLE board_meta ADD COLUMN injury_weight REAL NOT NULL DEFAULT 0",
+        """
+        CREATE TABLE IF NOT EXISTS injury_reports (
+          canonical_id TEXT NOT NULL,
+          source       TEXT NOT NULL,
+          status       TEXT NOT NULL DEFAULT '',
+          raw_status   TEXT NOT NULL DEFAULT '',
+          detail       TEXT NOT NULL DEFAULT '',
+          practice     TEXT NOT NULL DEFAULT '',
+          fetched_at   TEXT NOT NULL,
+          PRIMARY KEY (canonical_id, source)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS durability (
+          canonical_id TEXT PRIMARY KEY,
+          name         TEXT NOT NULL DEFAULT '',
+          position     TEXT NOT NULL DEFAULT '',
+          games        TEXT NOT NULL DEFAULT '{}',
+          avg_missed   REAL NOT NULL DEFAULT 0,
+          seasons_seen INTEGER NOT NULL DEFAULT 0,
+          designations INTEGER NOT NULL DEFAULT 0,
+          soft_tissue  INTEGER NOT NULL DEFAULT 0,
+          risk         TEXT NOT NULL DEFAULT '',
+          discount     REAL NOT NULL DEFAULT 0,
+          note         TEXT NOT NULL DEFAULT '',
+          updated_at   TEXT NOT NULL
+        )
+        """,
     ),
 )
 

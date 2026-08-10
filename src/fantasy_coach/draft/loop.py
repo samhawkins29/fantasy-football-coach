@@ -49,11 +49,13 @@ from fantasy_coach.draft.recommend import (
 )
 from fantasy_coach.draft.state import DraftState, snake_team_for_pick
 from fantasy_coach.ingest.canonical import CanonicalPlayer
+from fantasy_coach.ingest.injury import InjuryReport, merge_reports
 from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.store.store import CoachStore
 from fantasy_coach.value.board import ValueBoard, build_value_board
+from fantasy_coach.value.injury import build_risk_index
 
-__all__ = ["PickSource", "YahooPickSource", "DraftLoop"]
+__all__ = ["PickSource", "YahooPickSource", "StatusSource", "DraftLoop"]
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +67,31 @@ DEFAULT_STALE_AFTER = 12.0
 #: Positions the tier columns surface, in display order.
 _TIER_POSITIONS = ("QB", "RB", "WR", "TE")
 
+#: Default seconds between live injury-status re-checks. Deliberately much
+#: slower than the pick poll: the status source (Sleeper's full players blob)
+#: is a big pull, statuses change on the minutes scale, and politeness is a
+#: framework principle (§7) — the *pick* cadence stays 2.5s regardless.
+DEFAULT_STATUS_INTERVAL = 120.0
+
 
 class PickSource(Protocol):
     """Anything that returns the league's current full pick list."""
 
     def fetch(self) -> list[DraftPick]:  # pragma: no cover - protocol
+        ...
+
+
+class StatusSource(Protocol):
+    """A live injury-status feed: ``{canonical_id: report}`` per fetch.
+
+    The concrete one is
+    :class:`~fantasy_coach.ingest.injury.SleeperStatusSource` (free, keyless,
+    frequently updated); the protocol keeps tests offline and Yahoo swappable.
+    """
+
+    name: str
+
+    def fetch(self) -> dict[str, InjuryReport]:  # pragma: no cover - protocol
         ...
 
 
@@ -106,6 +128,16 @@ class DraftLoop:
             enables playoff values, schedule notes, and the bye-stacking nudge.
         playoff_weight: Blend weight for the board's draft value (0.0 = pure
             season VORP, the pre-step-5 behavior).
+        status_source: Optional live injury-status feed (step 6). Re-checked
+            every ``status_interval`` seconds inside the normal poll cycle; a
+            changed designation forces a board recompute, so a player ruled
+            out mid-draft drops in real time. The store's Yahoo/Sleeper
+            reports from the warm pass are the baseline the live feed merges
+            over (fresh beats stale, severe beats mild).
+        status_interval: Seconds between live status re-checks (the pick poll
+            keeps its own, much faster cadence).
+        injury_weight: How hard the injury/durability discount shades draft
+            values on the live board (0.0 = flags only, ranking unchanged).
         time_func / sleep_func: Injectable clock (tests never sleep).
     """
 
@@ -125,6 +157,9 @@ class DraftLoop:
         season: int | None = None,
         schedule: SeasonSchedule | None = None,
         playoff_weight: float = 0.0,
+        status_source: StatusSource | None = None,
+        status_interval: float = DEFAULT_STATUS_INTERVAL,
+        injury_weight: float = 0.0,
         time_func: Callable[[], float] = time.time,
         sleep_func: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -133,6 +168,9 @@ class DraftLoop:
         self._source = source
         self._schedule = schedule
         self._playoff_weight = playoff_weight
+        self._status_source = status_source
+        self._status_interval = status_interval
+        self._injury_weight = injury_weight
         self.league_key = league_key or settings.league_key
         self.mode = mode
         self.poll_interval = poll_interval
@@ -149,6 +187,14 @@ class DraftLoop:
         self._players: list[CanonicalPlayer] = store.canonical_players()
         self._by_canonical = {p.canonical_id: p for p in self._players}
         self._num_teams = settings.max_teams or 12
+
+        # Injury picture (step 6): per-source reports seeded from the store's
+        # warm pass; the live status source overwrites its own slice each
+        # re-check and the cross-source merge re-runs.
+        self._reports_by_source = store.injury_reports_by_source()
+        self._durability = store.durability_profiles()
+        self._merged_reports = self._merge_all_reports()
+        self._last_status_poll: float | None = None
 
         self.state = DraftState(
             self._players, league_key=self.league_key, my_team_key=my_team_key
@@ -190,12 +236,13 @@ class DraftLoop:
         Raises whatever the source raises — :meth:`run` catches, logs, and
         keeps the last good snapshot (flagged stale once old enough).
         """
+        status_changed = self._refresh_statuses()
         picks = self._source.fetch()
         self.poll_count += 1
         sig = tuple(
             (p.pick, p.player_key, p.team_key) for p in picks if p.is_made
         )
-        if sig != self._last_sig or self._board is None:
+        if sig != self._last_sig or self._board is None or status_changed:
             self.state.rebuild(picks)
             if self._record_to_store:
                 self._store.clear_draft_picks(self.league_key)
@@ -210,11 +257,58 @@ class DraftLoop:
             self._snapshot = snapshot
         return snapshot
 
+    def _merge_all_reports(self) -> dict[str, InjuryReport]:
+        """Cross-source merged status per player (fresh beats stale, severe beats mild)."""
+        by_player: dict[str, list[InjuryReport]] = {}
+        for reports in self._reports_by_source.values():
+            for cid, report in reports.items():
+                by_player.setdefault(cid, []).append(report)
+        merged: dict[str, InjuryReport] = {}
+        for cid, reports in by_player.items():
+            winner = merge_reports(reports)
+            if winner is not None:
+                merged[cid] = winner
+        return merged
+
+    def _refresh_statuses(self) -> bool:
+        """Re-check the live status source when due; True if any status changed.
+
+        Failures are logged and swallowed — a broken status feed must never
+        stall the pick loop. Fetched reports are mirrored into the store (its
+        vintage stamp is the freshness record the founder checks).
+        """
+        if self._status_source is None:
+            return False
+        now = self._time()
+        if (
+            self._last_status_poll is not None
+            and now - self._last_status_poll < self._status_interval
+        ):
+            return False
+        self._last_status_poll = now
+        try:
+            fetched = self._status_source.fetch()
+        except Exception as exc:
+            logger.warning("status re-check failed (%s) — keeping last statuses", exc)
+            return False
+        self._reports_by_source[self._status_source.name] = fetched
+        if self._record_to_store:
+            self._store.upsert_injury_reports(fetched, source=self._status_source.name)
+        merged = self._merge_all_reports()
+        changed = {
+            cid: r.status for cid, r in merged.items() if r.status
+        } != {cid: r.status for cid, r in self._merged_reports.items() if r.status}
+        self._merged_reports = merged
+        if changed:
+            logger.info("injury statuses changed — board will recompute")
+        return changed
+
     def _recompute(self) -> None:
         """Rebuild the available board + ranking + recommendation from state."""
         drafted = self.state.drafted_canonical_ids
         projections = [r for r in self._projections if r.source_id not in drafted]
         players = [p for p in self._players if p.canonical_id not in drafted]
+        risk = build_risk_index(self._merged_reports, self._durability)
         self._board = build_value_board(
             projections,
             self._settings,
@@ -222,6 +316,8 @@ class DraftLoop:
             players=players or None,
             schedule=self._schedule,
             playoff_weight=self._playoff_weight,
+            risk=risk or None,
+            injury_weight=self._injury_weight,
         )
         slots = assign_roster(roster_slots(self._settings), self._my_roster_infos())
         self._slots = slots
@@ -398,6 +494,24 @@ class DraftLoop:
                 "weeks": board.playoff_weeks if board else [],
                 "schedule_loaded": self._schedule is not None,
             },
+            "injury": {
+                "weight": self._injury_weight,
+                "status_source": (
+                    self._status_source.name if self._status_source else None
+                ),
+                "status_poll_age": (
+                    round(self._time() - self._last_status_poll, 1)
+                    if self._last_status_poll is not None
+                    else None
+                ),
+                "flagged_count": sum(
+                    1 for r in self._merged_reports.values() if r.status
+                ),
+            },
+            "vintage": [
+                {"scope": row["scope"], "refreshed_at": row["refreshed_at"]}
+                for row in self._store.vintage()
+            ],
             "draft": {
                 "pick_count": made,
                 "total_picks": total,

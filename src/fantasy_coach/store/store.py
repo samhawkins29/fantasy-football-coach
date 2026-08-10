@@ -53,6 +53,11 @@ from fantasy_coach.clients.models import (
     StatCategory,
 )
 from fantasy_coach.ingest.canonical import CanonicalPlayer, ExternalIds
+from fantasy_coach.ingest.injury import (
+    DurabilityProfile,
+    InjuryReport,
+    merge_reports,
+)
 from fantasy_coach.ingest.sources import ProjectionRecord
 from fantasy_coach.store.schema import (
     STAT_HISTORY_STAT_COLUMNS,
@@ -75,6 +80,8 @@ _TABLES = (
     "stats_history",
     "value_board",
     "draft_picks",
+    "injury_reports",
+    "durability",
 )
 
 
@@ -533,6 +540,153 @@ class CoachStore:
             self.stamp_vintage("stats_history")
         return written
 
+    # -- injury reports + durability (step 6) ----------------------------------
+
+    def upsert_injury_reports(
+        self, reports: Mapping[str, InjuryReport], *, source: str
+    ) -> int:
+        """Upsert one source's current designations (``{canonical_id: report}``).
+
+        Healthy reports are stored too — a fresh "no designation" is what
+        clears a stale flag in the merge. A report without ``fetched_at`` is
+        stamped with the store clock at write time. Returns the count written
+        and stamps ``injury_status:{source}`` vintage.
+        """
+        written = 0
+        with self.conn:
+            for cid, report in reports.items():
+                self.conn.execute(
+                    """
+                    INSERT INTO injury_reports (
+                      canonical_id, source, status, raw_status, detail,
+                      practice, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (canonical_id, source) DO UPDATE SET
+                      status = excluded.status,
+                      raw_status = excluded.raw_status,
+                      detail = excluded.detail,
+                      practice = excluded.practice,
+                      fetched_at = excluded.fetched_at
+                    """,
+                    (
+                        cid,
+                        source,
+                        report.status,
+                        report.raw_status,
+                        report.detail,
+                        report.practice,
+                        report.fetched_at or self._now(),
+                    ),
+                )
+                written += 1
+        if written:
+            self.stamp_vintage(f"injury_status:{source}")
+        return written
+
+    def injury_reports_by_source(self) -> dict[str, dict[str, InjuryReport]]:
+        """Every stored designation, grouped ``{source: {canonical_id: report}}``.
+
+        The live loop seeds its per-source picture from this so a mid-draft
+        Sleeper re-check replaces only the Sleeper slice.
+        """
+        out: dict[str, dict[str, InjuryReport]] = {}
+        for row in self.conn.execute("SELECT * FROM injury_reports").fetchall():
+            out.setdefault(row["source"], {})[row["canonical_id"]] = InjuryReport(
+                source=row["source"],
+                status=row["status"],
+                raw_status=row["raw_status"],
+                detail=row["detail"],
+                practice=row["practice"],
+                fetched_at=row["fetched_at"],
+            )
+        return out
+
+    def injury_reports(self, *, source: str | None = None) -> dict[str, InjuryReport]:
+        """Stored designations as ``{canonical_id: report}``.
+
+        With no ``source``, multi-source rows are collapsed per player with the
+        fresh-beats-stale / severe-beats-mild rule
+        (:func:`~fantasy_coach.ingest.injury.merge_reports`) — the board's
+        input. ``source=...`` returns that one source's rows unmerged.
+        """
+        by_source = self.injury_reports_by_source()
+        if source is not None:
+            return by_source.get(source, {})
+        by_player: dict[str, list[InjuryReport]] = {}
+        for reports in by_source.values():
+            for cid, report in reports.items():
+                by_player.setdefault(cid, []).append(report)
+        out: dict[str, InjuryReport] = {}
+        for cid, reports in by_player.items():
+            winner = merge_reports(reports)
+            if winner is not None:
+                out[cid] = winner
+        return out
+
+    def upsert_durability(self, profiles: Iterable[DurabilityProfile]) -> int:
+        """Upsert per-player durability profiles; return the count written."""
+        written = 0
+        with self.conn:
+            for p in profiles:
+                self.conn.execute(
+                    """
+                    INSERT INTO durability (
+                      canonical_id, name, position, games, avg_missed,
+                      seasons_seen, designations, soft_tissue, risk, discount,
+                      note, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (canonical_id) DO UPDATE SET
+                      name = excluded.name,
+                      position = excluded.position,
+                      games = excluded.games,
+                      avg_missed = excluded.avg_missed,
+                      seasons_seen = excluded.seasons_seen,
+                      designations = excluded.designations,
+                      soft_tissue = excluded.soft_tissue,
+                      risk = excluded.risk,
+                      discount = excluded.discount,
+                      note = excluded.note,
+                      updated_at = excluded.updated_at
+                    """,
+                    (
+                        p.canonical_id,
+                        p.name,
+                        p.position,
+                        json.dumps({str(y): g for y, g in p.games.items()}),
+                        p.avg_missed,
+                        p.seasons_seen,
+                        p.designations,
+                        p.soft_tissue,
+                        p.risk,
+                        p.discount,
+                        p.note,
+                        self._now(),
+                    ),
+                )
+                written += 1
+        if written:
+            self.stamp_vintage("durability")
+        return written
+
+    def durability_profiles(self) -> dict[str, DurabilityProfile]:
+        """Stored durability profiles as ``{canonical_id: profile}``."""
+        out: dict[str, DurabilityProfile] = {}
+        for row in self.conn.execute("SELECT * FROM durability").fetchall():
+            out[row["canonical_id"]] = DurabilityProfile(
+                canonical_id=row["canonical_id"],
+                name=row["name"],
+                position=row["position"],
+                games={int(y): float(g) for y, g in json.loads(row["games"]).items()},
+                avg_missed=row["avg_missed"],
+                seasons_seen=row["seasons_seen"],
+                designations=row["designations"],
+                soft_tissue=row["soft_tissue"],
+                risk=row["risk"],
+                discount=row["discount"],
+                note=row["note"],
+            )
+        return out
+
     # -- value board (snapshot semantics) --------------------------------------
 
     def replace_board(self, league_key: str, board: ValueBoard) -> int:
@@ -553,8 +707,9 @@ class CoachStore:
                     INSERT INTO value_board (
                       league_key, canonical_id, name, position, team, points, vorp,
                       draft_value, playoff_vorp, schedule_note,
+                      injury_status, durability_risk, injury_note, injury_discount,
                       overall_rank, pos_rank, tier, value_source, adp, bye_week, built_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         league_key,
@@ -567,6 +722,10 @@ class CoachStore:
                         e.draft_value,
                         e.playoff_vorp,
                         e.schedule_note,
+                        e.injury_status,
+                        e.durability_risk,
+                        e.injury_note,
+                        e.injury_discount,
                         e.overall_rank,
                         e.pos_rank,
                         e.tier,
@@ -580,8 +739,8 @@ class CoachStore:
                 """
                 INSERT INTO board_meta (
                   league_key, num_teams, baselines, scoring, skipped_no_signal,
-                  playoff_weight, playoff_weeks, built_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  playoff_weight, playoff_weeks, injury_weight, built_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (league_key) DO UPDATE SET
                   num_teams = excluded.num_teams,
                   baselines = excluded.baselines,
@@ -589,6 +748,7 @@ class CoachStore:
                   skipped_no_signal = excluded.skipped_no_signal,
                   playoff_weight = excluded.playoff_weight,
                   playoff_weeks = excluded.playoff_weeks,
+                  injury_weight = excluded.injury_weight,
                   built_at = excluded.built_at
                 """,
                 (
@@ -599,6 +759,7 @@ class CoachStore:
                     board.skipped_no_signal,
                     board.playoff_weight,
                     json.dumps(board.playoff_weeks),
+                    board.injury_weight,
                     built_at,
                 ),
             )

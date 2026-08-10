@@ -20,6 +20,14 @@ from fantasy_coach.value.board import (
     replacement_baselines,
     starter_demand,
 )
+from fantasy_coach.value.injury import (
+    STATUS_DISCOUNTS,
+    PlayerRisk,
+    build_risk_index,
+    injury_multiplier,
+    injury_note,
+    total_discount,
+)
 from fantasy_coach.value.schedule import (
     blend_value,
     playoff_weeks,
@@ -34,6 +42,12 @@ from fantasy_coach.value.scoring import (
 )
 
 __all__ = [
+    "STATUS_DISCOUNTS",
+    "PlayerRisk",
+    "build_risk_index",
+    "total_discount",
+    "injury_multiplier",
+    "injury_note",
     "playoff_weeks",
     "weekly_points",
     "blend_value",

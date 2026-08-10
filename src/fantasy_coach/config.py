@@ -52,6 +52,10 @@ class Config:
             ``(1−w)·season VORP + w·playoff strength``. ``0.0`` (default)
             keeps the board pure season value — the schedule layer is
             off-by-default; ``~0.25`` is a meaningful playoff tilt.
+        injury_emphasis: The step-6 injury/durability discount weight in
+            [0, 1]. ``0.0`` (default) shows risk flags but changes no value
+            or rank — off-by-default; ``~0.5–1.0`` applies a half-to-full
+            share of the documented status/durability discounts.
         cache_dir: Local data-cache directory (projections, schedule etc.;
             git-ignored).
         db_path: The single-file SQLite data store (git-ignored via
@@ -69,6 +73,7 @@ class Config:
     fantasypros_api_key: str = ""
     projection_source: str = DEFAULT_PROJECTION_SOURCE
     playoff_emphasis: float = 0.0
+    injury_emphasis: float = 0.0
     cache_dir: Path = field(default_factory=lambda: Path(DEFAULT_CACHE_DIR))
     db_path: Path = field(default_factory=lambda: Path(DEFAULT_DB_PATH))
 
@@ -104,17 +109,18 @@ class Config:
 
         token_path = environ.get("FANTASY_COACH_TOKEN_PATH", DEFAULT_TOKEN_PATH)
 
-        emphasis_raw = environ.get("PLAYOFF_EMPHASIS", "").strip()
-        try:
-            playoff_emphasis = float(emphasis_raw) if emphasis_raw else 0.0
-        except ValueError:
-            raise ConfigError(
-                f"PLAYOFF_EMPHASIS must be a number in [0, 1], got {emphasis_raw!r}."
-            )
-        if not 0.0 <= playoff_emphasis <= 1.0:
-            raise ConfigError(
-                f"PLAYOFF_EMPHASIS must be in [0, 1], got {playoff_emphasis}."
-            )
+        def emphasis(var: str) -> float:
+            raw = environ.get(var, "").strip()
+            try:
+                value = float(raw) if raw else 0.0
+            except ValueError:
+                raise ConfigError(f"{var} must be a number in [0, 1], got {raw!r}.")
+            if not 0.0 <= value <= 1.0:
+                raise ConfigError(f"{var} must be in [0, 1], got {value}.")
+            return value
+
+        playoff_emphasis = emphasis("PLAYOFF_EMPHASIS")
+        injury_emphasis = emphasis("INJURY_EMPHASIS")
 
         return cls(
             yahoo_client_id=environ.get("YAHOO_CLIENT_ID", "").strip(),
@@ -130,6 +136,7 @@ class Config:
             projection_source=environ.get("PROJECTION_SOURCE", "").strip().lower()
             or DEFAULT_PROJECTION_SOURCE,
             playoff_emphasis=playoff_emphasis,
+            injury_emphasis=injury_emphasis,
             cache_dir=Path(environ.get("FANTASY_COACH_CACHE_DIR", DEFAULT_CACHE_DIR)),
             db_path=Path(environ.get("FANTASY_COACH_DB_PATH", DEFAULT_DB_PATH)),
         )

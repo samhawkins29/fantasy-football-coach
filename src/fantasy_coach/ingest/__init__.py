@@ -61,6 +61,15 @@ from fantasy_coach.ingest.crosswalk import (
     load_id_crosswalk,
 )
 from fantasy_coach.ingest.index import PlayerIndex, build_player_index
+from fantasy_coach.ingest.injury import (
+    DURABILITY_NOTE,
+    DurabilityProfile,
+    DurabilitySource,
+    InjuryReport,
+    SleeperStatusSource,
+    merge_reports,
+    normalize_status,
+)
 from fantasy_coach.ingest.projections import (
     PROJECTED_STAT_KEYS,
     PROJECTION_NOTE,
@@ -159,6 +168,14 @@ __all__ = [
     "SeasonSchedule",
     "ScheduleSource",
     "SCHEDULE_NOTE",
+    # injury/durability (step 6 — current status + re-injury risk signal)
+    "InjuryReport",
+    "normalize_status",
+    "merge_reports",
+    "SleeperStatusSource",
+    "DurabilityProfile",
+    "DurabilitySource",
+    "DURABILITY_NOTE",
     # index
     "PlayerIndex",
     "build_player_index",

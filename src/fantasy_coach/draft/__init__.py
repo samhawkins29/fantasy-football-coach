@@ -8,7 +8,12 @@ draft room. ``--simulate`` replays a scripted draft through the identical loop
 so everything is testable long before draft night.
 """
 
-from fantasy_coach.draft.loop import DraftLoop, PickSource, YahooPickSource
+from fantasy_coach.draft.loop import (
+    DraftLoop,
+    PickSource,
+    StatusSource,
+    YahooPickSource,
+)
 from fantasy_coach.draft.recommend import (
     Recommendation,
     RosterNeeds,
@@ -25,6 +30,7 @@ from fantasy_coach.draft.web import CompanionServer
 __all__ = [
     "DraftLoop",
     "PickSource",
+    "StatusSource",
     "YahooPickSource",
     "Recommendation",
     "RosterNeeds",
