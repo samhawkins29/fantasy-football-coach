@@ -243,6 +243,12 @@ def draft(
     sim_speed: int = typer.Option(
         1, "--sim-speed", help="[simulate] Picks revealed per poll."
     ),
+    playoff_weight: float = typer.Option(
+        -1.0, "--playoff-weight", min=-1.0, max=1.0,
+        help="Playoff emphasis w in [0,1]: draft value = (1-w)*season VORP + "
+        "w*playoff strength. Default -1 = use PLAYOFF_EMPHASIS from .env "
+        "(0.0 = off, pure season value).",
+    ),
     no_warm: bool = typer.Option(
         False, "--no-warm", help="[live] Skip the startup store-warm pass."
     ),
@@ -256,6 +262,8 @@ def draft(
     throttle), rebuilds the drafted set each poll (undo-safe), recomputes the
     available VORP board with baselines that shift as pools drain, weights it
     by your unfilled roster slots, and serves the auto-refreshing board page.
+    With a cached schedule and ``--playoff-weight`` > 0 the board blends in
+    playoff-week strength and nudges away from bye-week pile-ups.
 
     ``--simulate`` runs the exact same loop against a scripted snake draft
     generated from the stored board — the full dress rehearsal for draft day.
@@ -272,6 +280,7 @@ def draft(
     )
     config = Config.load()
     store = CoachStore(config.db_path)
+    weight = config.playoff_emphasis if playoff_weight < 0 else playoff_weight
 
     league_key = league.strip() or config.yahoo_league_key
     if not league_key:
@@ -287,12 +296,13 @@ def draft(
 
     if simulate:
         loop = _build_sim_loop(
-            store, league_key, team, sim_slot=sim_slot, sim_speed=sim_speed
+            store, config, league_key, team,
+            sim_slot=sim_slot, sim_speed=sim_speed, playoff_weight=weight,
         )
         poll_interval = poll or 1.5
     else:
         loop = _build_live_loop(
-            store, config, league_key, team, warm=not no_warm
+            store, config, league_key, team, warm=not no_warm, playoff_weight=weight
         )
         poll_interval = poll or DRAFT_POLL_INTERVAL
     loop.poll_interval = poll_interval
@@ -306,7 +316,7 @@ def draft(
     console.print(
         f"[dim]mode={loop.mode} · league={loop.league_key} · "
         f"team={loop.state.my_team_key or 'unset'} · poll every {poll_interval}s · "
-        f"Ctrl+C to stop.[/]\n"
+        f"playoff emphasis {weight:g} · Ctrl+C to stop.[/]\n"
     )
     if not no_browser:
         try:
@@ -325,7 +335,39 @@ def draft(
         store.close()
 
 
-def _build_sim_loop(store, league_key: str, team: str, *, sim_slot: int, sim_speed: int):
+def _load_schedule(config: Config, *, refresh: bool):
+    """Load the season's schedule (step 5) — cache-first, degrade to ``None``.
+
+    ``refresh=True`` (live warm path) recomputes from nflverse and rewrites
+    the cache; failures fall back to the existing cache; no cache at all is a
+    warning, never an error — the board simply stays season-only.
+    """
+    from fantasy_coach.ingest.projections import default_season
+    from fantasy_coach.ingest.schedule import ScheduleSource
+
+    season = default_season()
+    source = ScheduleSource(cache_dir=config.cache_dir)
+    if refresh:
+        try:
+            return source.warm_cache(season)
+        except Exception as exc:
+            console.print(
+                f"[yellow]schedule refresh failed ({exc}); trying the cache…[/]"
+            )
+    try:
+        return source.load(season)
+    except Exception as exc:
+        console.print(
+            f"[yellow]No schedule available ({exc}) — board stays season-only "
+            "(no playoff blend / bye nudge).[/]"
+        )
+        return None
+
+
+def _build_sim_loop(
+    store, config: Config, league_key: str, team: str,
+    *, sim_slot: int, sim_speed: int, playoff_weight: float,
+):
     """Wire the offline simulation loop: stored settings + scripted picks."""
     from fantasy_coach.draft import DraftLoop, SimulatedPickSource, script_draft, sim_team_names
 
@@ -352,10 +394,15 @@ def _build_sim_loop(store, league_key: str, team: str, *, sim_slot: int, sim_spe
         mode="simulation",
         team_names=sim_team_names(league_key, num_teams, sim_slot),
         record_to_store=False,  # never write sim picks over a real league's table
+        schedule=_load_schedule(config, refresh=False),
+        playoff_weight=playoff_weight,
     )
 
 
-def _build_live_loop(store, config: Config, league_key: str, team: str, *, warm: bool):
+def _build_live_loop(
+    store, config: Config, league_key: str, team: str,
+    *, warm: bool, playoff_weight: float,
+):
     """Wire the live loop: authed Yahoo client, settings, keepers, warm pass."""
     from fantasy_coach.auth.session import get_authed_client
     from fantasy_coach.clients.yahoo import YahooClient
@@ -373,9 +420,13 @@ def _build_live_loop(store, config: Config, league_key: str, team: str, *, warm:
     console.print(f"[dim]Fetching settings for {league_key}…[/]")
     settings = yahoo.get_league_settings(league_key)
 
+    schedule = _load_schedule(config, refresh=warm)
     if warm:
         result = warm_store(
-            store, settings, projection_source=NflverseProjectionSource()
+            store, settings,
+            projection_source=NflverseProjectionSource(cache_dir=config.cache_dir),
+            schedule=schedule,
+            playoff_weight=playoff_weight,
         )
         console.print("[dim]" + result.summary() + "[/]")
 
@@ -402,6 +453,8 @@ def _build_live_loop(store, config: Config, league_key: str, team: str, *, warm:
         league_key=league_key,
         mode="live",
         team_names=team_names,
+        schedule=schedule,
+        playoff_weight=playoff_weight,
     )
 
     # Seed keepers / pre-rostered players so they are never recommended.

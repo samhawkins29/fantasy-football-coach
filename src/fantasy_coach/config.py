@@ -48,7 +48,12 @@ class Config:
         fantasypros_api_key: Optional FantasyPros API key (later modules).
         projection_source: Which ProjectionSource the value engine uses —
             ``"nflverse"`` (free, default) or ``"fantasypros"`` (needs the key).
-        cache_dir: Local data-cache directory (projections etc.; git-ignored).
+        playoff_emphasis: The step-5 playoff blend weight ``w`` in
+            ``(1−w)·season VORP + w·playoff strength``. ``0.0`` (default)
+            keeps the board pure season value — the schedule layer is
+            off-by-default; ``~0.25`` is a meaningful playoff tilt.
+        cache_dir: Local data-cache directory (projections, schedule etc.;
+            git-ignored).
         db_path: The single-file SQLite data store (git-ignored via
             ``*.sqlite3``) — league rules, players, ADP, projections, the
             value board.
@@ -63,6 +68,7 @@ class Config:
     odds_api_key: str = ""
     fantasypros_api_key: str = ""
     projection_source: str = DEFAULT_PROJECTION_SOURCE
+    playoff_emphasis: float = 0.0
     cache_dir: Path = field(default_factory=lambda: Path(DEFAULT_CACHE_DIR))
     db_path: Path = field(default_factory=lambda: Path(DEFAULT_DB_PATH))
 
@@ -98,6 +104,18 @@ class Config:
 
         token_path = environ.get("FANTASY_COACH_TOKEN_PATH", DEFAULT_TOKEN_PATH)
 
+        emphasis_raw = environ.get("PLAYOFF_EMPHASIS", "").strip()
+        try:
+            playoff_emphasis = float(emphasis_raw) if emphasis_raw else 0.0
+        except ValueError:
+            raise ConfigError(
+                f"PLAYOFF_EMPHASIS must be a number in [0, 1], got {emphasis_raw!r}."
+            )
+        if not 0.0 <= playoff_emphasis <= 1.0:
+            raise ConfigError(
+                f"PLAYOFF_EMPHASIS must be in [0, 1], got {playoff_emphasis}."
+            )
+
         return cls(
             yahoo_client_id=environ.get("YAHOO_CLIENT_ID", "").strip(),
             yahoo_client_secret=environ.get("YAHOO_CLIENT_SECRET", "").strip(),
@@ -111,6 +129,7 @@ class Config:
             fantasypros_api_key=environ.get("FANTASYPROS_API_KEY", "").strip(),
             projection_source=environ.get("PROJECTION_SOURCE", "").strip().lower()
             or DEFAULT_PROJECTION_SOURCE,
+            playoff_emphasis=playoff_emphasis,
             cache_dir=Path(environ.get("FANTASY_COACH_CACHE_DIR", DEFAULT_CACHE_DIR)),
             db_path=Path(environ.get("FANTASY_COACH_DB_PATH", DEFAULT_DB_PATH)),
         )

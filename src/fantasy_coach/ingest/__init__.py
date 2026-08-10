@@ -78,6 +78,11 @@ from fantasy_coach.ingest.names import (
     normalize_position,
     normalize_team,
 )
+from fantasy_coach.ingest.schedule import (
+    SCHEDULE_NOTE,
+    ScheduleSource,
+    SeasonSchedule,
+)
 from fantasy_coach.ingest.resolver import (
     DEFAULT_FUZZY_THRESHOLD,
     IdResolver,
@@ -150,6 +155,10 @@ __all__ = [
     "PROJECTED_STAT_KEYS",
     "REFERENCE_SCORING",
     "PROJECTION_NOTE",
+    # schedule (step 5 — opponent map, byes, matchup difficulty)
+    "SeasonSchedule",
+    "ScheduleSource",
+    "SCHEDULE_NOTE",
     # index
     "PlayerIndex",
     "build_player_index",

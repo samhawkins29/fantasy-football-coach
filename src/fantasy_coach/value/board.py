@@ -23,6 +23,15 @@ M4 §4.2, end to end:
    late-round flat value. Every entry is labelled with its ``value_source``
    (``"projection"`` / ``"adp"`` / ``"flat"``) so the honesty posture survives
    into the board.
+6. **Schedule awareness** (step 5, optional): given a
+   :class:`~fantasy_coach.ingest.schedule.SeasonSchedule`, each projection-based
+   entry also gets a matchup-adjusted **playoff VORP** over the league's own
+   fantasy-playoff weeks and a **blended draft value**
+   ``(1−w)·VORP + w·annualized playoff VORP`` (see
+   :mod:`fantasy_coach.value.schedule`). The board ranks by draft value —
+   which **equals VORP exactly** when the schedule is absent or
+   ``playoff_weight=0``, so the schedule layer is off-by-default-safe. Byes
+   are filled from the schedule when the canonical layer lacks them.
 
 Everything is parameterized by the passed-in :class:`LeagueSettings` — different
 leagues produce different boards from the same projections. Joins run on the
@@ -40,7 +49,14 @@ from fantasy_coach.clients.models import BENCH_POSITIONS, LeagueSettings, Roster
 from fantasy_coach.ingest.canonical import CanonicalPlayer
 from fantasy_coach.ingest.names import normalize_position
 from fantasy_coach.ingest.projections import score_stats
+from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.ingest.sources import ProjectionRecord
+from fantasy_coach.value.schedule import (
+    blend_value,
+    playoff_weeks,
+    schedule_note,
+    weekly_points,
+)
 from fantasy_coach.value.scoring import league_scoring
 
 __all__ = [
@@ -79,6 +95,13 @@ class BoardEntry:
     positions and across value sources: for ``"adp"``/``"flat"`` entries it is a
     market-implied estimate placed on the same scale, and ``value_source`` says
     exactly which kind of number you are looking at.
+
+    The schedule-aware fields (step 5) are ``None``/empty when the board was
+    built without a schedule: ``playoff_vorp`` is the matchup-adjusted value
+    over the league's playoff weeks, ``draft_value`` the season↔playoff blend
+    the board ranks by (``None`` means "rank by ``vorp``" — the two are equal
+    whenever the playoff emphasis is off), and ``schedule_note`` a short
+    narration when the playoff schedule is notably soft/tough.
     """
 
     canonical_id: str
@@ -93,11 +116,20 @@ class BoardEntry:
     tier: int = 0
     adp: float | None = None
     bye_week: int | None = None
+    playoff_points: float | None = None
+    playoff_vorp: float | None = None
+    draft_value: float | None = None
+    schedule_note: str = ""
 
     @property
     def is_projection_based(self) -> bool:
         """True when ``vorp`` comes from a rescored stat-line projection."""
         return self.value_source == SOURCE_PROJECTION
+
+    @property
+    def rank_value(self) -> float:
+        """What this entry ranks by: the blended draft value, else raw VORP."""
+        return self.vorp if self.draft_value is None else self.draft_value
 
 
 @dataclass(slots=True)
@@ -111,6 +143,10 @@ class ValueBoard:
         num_teams: League size the baselines assumed.
         skipped_no_signal: Players dropped for having neither a projection nor
             an ADP (undraftable — but the count is surfaced, not hidden).
+        playoff_weeks: The fantasy-playoff weeks the schedule fields used
+            (empty when the board was built without a schedule).
+        playoff_weight: The blend weight ``w`` the draft values were built
+            with (0.0 = pure season VORP — the pre-step-5 board).
     """
 
     entries: list[BoardEntry] = field(default_factory=list)
@@ -118,6 +154,8 @@ class ValueBoard:
     scoring: dict[str, float] = field(default_factory=dict)
     num_teams: int = _DEFAULT_NUM_TEAMS
     skipped_no_signal: int = 0
+    playoff_weeks: list[int] = field(default_factory=list)
+    playoff_weight: float = 0.0
 
     def top(self, n: int = 30) -> list[BoardEntry]:
         """The top ``n`` overall — the draft-board view."""
@@ -292,6 +330,8 @@ def build_value_board(
     *,
     num_teams: int | None = None,
     players: Iterable[CanonicalPlayer] | None = None,
+    schedule: SeasonSchedule | None = None,
+    playoff_weight: float = 0.0,
     tier_gap_factor: float = 1.5,
     tier_min_gap: float = 10.0,
     tier_fixed_gap: float | None = None,
@@ -304,7 +344,8 @@ def build_value_board(
             without a component ``stats`` line fall back to their pre-scored
             ``points`` (still labelled projection-based).
         settings: The league's real settings — scoring *and* roster demand both
-            come from here; nothing is hardcoded.
+            come from here; nothing is hardcoded. The fantasy-playoff weeks for
+            the schedule fields come from here too (§step 5).
         num_teams: League size. Defaults to ``settings.max_teams``, then 12.
         players: Optional canonical players (from M3's ``PlayerIndex``). Enables
             the gap-fill paths: anyone here *without* a matching projection gets
@@ -312,9 +353,16 @@ def build_value_board(
             entry. Matched players also contribute their ADP/bye to the entry,
             and the computed value is written back onto ``player.value`` so the
             canonical layer carries the result (M3 §3.3 "attached" slots).
+        schedule: Optional season schedule + opponent difficulty (step 5).
+            Enables playoff VORP, blended draft values, schedule notes, and
+            bye-week fill-in. ``None`` → the board is exactly the season board.
+        playoff_weight: The blend weight ``w`` in ``(1−w)·VORP + w·annualized
+            playoff VORP``. ``0.0`` (default) preserves pre-step-5 ranking even
+            with a schedule present; ~``0.2–0.35`` is a meaningful playoff tilt.
 
     Returns:
-        A :class:`ValueBoard` sorted by VORP with per-position ranks and tiers.
+        A :class:`ValueBoard` sorted by draft value (== VORP when the playoff
+        emphasis is off) with per-position ranks and VORP-based tiers.
     """
     scoring = league_scoring(settings)
     teams = num_teams or settings.max_teams or _DEFAULT_NUM_TEAMS
@@ -401,15 +449,53 @@ def build_value_board(
             else:
                 skipped += 1  # no projection, no ADP, not K/DEF — undraftable
 
-    # Ranks: overall by VORP (ties → points, then name for determinism).
-    entries.sort(key=lambda e: (-e.vorp, -(e.points or 0.0), e.name))
+    # 6. Schedule awareness (step 5): playoff VORP + blended draft value.
+    pweeks = playoff_weeks(settings) if schedule is not None else []
+    if schedule is not None and pweeks:
+        season_weeks = max(pweeks)  # the fantasy season runs through the final
+        for e in entries:
+            if e.bye_week is None and e.team:
+                e.bye_week = schedule.bye_week(e.team)
+            if not e.is_projection_based or e.points is None or not e.team:
+                continue  # ADP/flat entries have no stat line to split
+            weekly = weekly_points(
+                e.points, e.team, e.position, schedule, through_week=season_weeks
+            )
+            if not weekly:
+                continue  # unknown team — no weekly view, stay season-only
+            p_points = sum(weekly.get(w, 0.0) for w in pweeks)
+            baseline = baselines.get(e.position, 0.0)
+            p_baseline = baseline * len(pweeks) / len(weekly)
+            e.playoff_points = round(p_points, 2)
+            e.playoff_vorp = round(p_points - p_baseline, 2)
+            e.draft_value = round(
+                blend_value(
+                    e.vorp,
+                    e.playoff_vorp,
+                    weight=playoff_weight,
+                    n_playoff_weeks=len(pweeks),
+                    n_season_weeks=len(weekly),
+                ),
+                2,
+            )
+            e.schedule_note = schedule_note(e.position, e.team, schedule, pweeks)
+
+    # Ranks: overall by draft value — identical to VORP order when the playoff
+    # emphasis is off (ties → VORP, points, then name for determinism).
+    entries.sort(key=lambda e: (-e.rank_value, -e.vorp, -(e.points or 0.0), e.name))
     for rank, e in enumerate(entries, start=1):
         e.overall_rank = rank
 
     # 4. Positional ranks + gap-based tiers (ADP/flat entries participate so the
     # positional view stays complete; their VORP is market-implied by design).
+    # Tiers cluster *season* VORP — a tier cliff is a talent gap, and it must
+    # not move when the playoff dial does — so the position list is re-sorted
+    # by VORP even when the board order is blended.
     for pos in {e.position for e in entries}:
-        pos_entries = [e for e in entries if e.position == pos]
+        pos_entries = sorted(
+            (e for e in entries if e.position == pos),
+            key=lambda e: (-e.vorp, -(e.points or 0.0), e.name),
+        )
         tiers = assign_tiers(
             [e.vorp for e in pos_entries],
             gap_factor=tier_gap_factor,
@@ -436,4 +522,6 @@ def build_value_board(
         scoring=scoring,
         num_teams=teams,
         skipped_no_signal=skipped,
+        playoff_weeks=pweeks,
+        playoff_weight=playoff_weight if schedule is not None else 0.0,
     )

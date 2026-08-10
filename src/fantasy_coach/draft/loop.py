@@ -49,6 +49,7 @@ from fantasy_coach.draft.recommend import (
 )
 from fantasy_coach.draft.state import DraftState, snake_team_for_pick
 from fantasy_coach.ingest.canonical import CanonicalPlayer
+from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.store.store import CoachStore
 from fantasy_coach.value.board import ValueBoard, build_value_board
 
@@ -101,6 +102,10 @@ class DraftLoop:
         team_names: Optional ``{team_key: display name}`` for the UI.
         record_to_store: Mirror picks into ``store.draft_picks`` each change.
         season: Projection season to load; default = newest stored.
+        schedule: Optional season schedule + opponent difficulty (step 5) —
+            enables playoff values, schedule notes, and the bye-stacking nudge.
+        playoff_weight: Blend weight for the board's draft value (0.0 = pure
+            season VORP, the pre-step-5 behavior).
         time_func / sleep_func: Injectable clock (tests never sleep).
     """
 
@@ -118,12 +123,16 @@ class DraftLoop:
         team_names: dict[str, str] | None = None,
         record_to_store: bool = True,
         season: int | None = None,
+        schedule: SeasonSchedule | None = None,
+        playoff_weight: float = 0.0,
         time_func: Callable[[], float] = time.time,
         sleep_func: Callable[[float], None] = time.sleep,
     ) -> None:
         self._store = store
         self._settings = settings
         self._source = source
+        self._schedule = schedule
+        self._playoff_weight = playoff_weight
         self.league_key = league_key or settings.league_key
         self.mode = mode
         self.poll_interval = poll_interval
@@ -211,14 +220,30 @@ class DraftLoop:
             self._settings,
             num_teams=self._num_teams,
             players=players or None,
+            schedule=self._schedule,
+            playoff_weight=self._playoff_weight,
         )
         slots = assign_roster(roster_slots(self._settings), self._my_roster_infos())
         self._slots = slots
         needs = compute_needs(slots)
-        self._ranked = rank_available(self._board, needs)
+        self._ranked = rank_available(
+            self._board, needs, starter_bye_counts=self._starter_bye_counts(slots)
+        )
         self._recommendation = build_recommendation(
             self._ranked, needs, current_pick=self.state.pick_count + 1
         )
+
+    @staticmethod
+    def _starter_bye_counts(slots: Sequence) -> dict[int, int]:
+        """``{bye_week: starters sharing it}`` from my filled starting slots."""
+        counts: dict[int, int] = {}
+        for slot in slots:
+            if slot.is_bench or slot.player is None:
+                continue
+            bye = slot.player.get("bye")
+            if isinstance(bye, int):
+                counts[bye] = counts.get(bye, 0) + 1
+        return counts
 
     # -- the loop --------------------------------------------------------------
 
@@ -368,6 +393,11 @@ class DraftLoop:
             "my_team_name": self._team_name(my_key) if my_key else "",
             "poll_interval": self.poll_interval,
             "error": self._last_error,
+            "playoff": {
+                "weight": self._playoff_weight if self._schedule else 0.0,
+                "weeks": board.playoff_weeks if board else [],
+                "schedule_loaded": self._schedule is not None,
+            },
             "draft": {
                 "pick_count": made,
                 "total_picks": total,

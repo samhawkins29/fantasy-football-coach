@@ -197,7 +197,9 @@
       <div style="max-height: 72vh; overflow-y: auto;">
         <table>
           <thead><tr>
-            <th>#</th><th>Player</th><th></th><th class="num">VORP</th><th class="num">Score</th>
+            <th>#</th><th>Player</th><th></th><th class="num">VORP</th>
+            <th class="num" id="th-dv" title="playoff-blended draft value">Draft</th>
+            <th class="num">Score</th>
             <th>Need</th><th class="num">Tier</th><th class="num">ADP</th><th></th>
           </tr></thead>
           <tbody id="avail"></tbody>
@@ -294,18 +296,22 @@ function renderHero(s) {
   }
   const r = s.recommendation;
   if (!r) { hero.innerHTML = `<div class="hero-empty">No recommendation yet…</div>`; return; }
+  const po = s.playoff || {};
+  const blended = po.weight > 0 && r.draft_value !== null && r.draft_value !== undefined;
   const runners = (s.runners_up || []).map(p => `
     <div class="runner">${posChip(p.position)}<span>${esc(p.name)}</span>
       <span class="score">${fmt(p.score)}</span></div>`).join("");
   hero.innerHTML = `
     <div class="hero-main">
-      <div class="hero-eyebrow">Best pick now</div>
+      <div class="hero-eyebrow">Best pick now${po.weight > 0 ? ` · playoff emphasis ${fmt(po.weight, 2)}` : ""}</div>
       <div class="hero-name">${esc(r.name)} ${posChip(r.position)}</div>
       <div class="hero-sub">${esc(r.team || "")}${r.bye ? ` · bye ${esc(String(r.bye))}` : ""}
         · ${esc(r.position)}${esc(String(r.pos_rank))} · tier ${esc(String(r.tier))}</div>
       <div class="hero-stats">
         <span><span class="big">${fmt(r.score)}</span><span class="lbl">Need-wtd score</span></span>
+        ${blended ? `<span><span class="big">${r.draft_value >= 0 ? "+" : ""}${fmt(r.draft_value)}</span><span class="lbl">Draft value</span></span>` : ""}
         <span><span class="big">${r.vorp >= 0 ? "+" : ""}${fmt(r.vorp)}</span><span class="lbl">VORP</span></span>
+        ${r.playoff_vorp !== null && r.playoff_vorp !== undefined ? `<span><span class="big">${r.playoff_vorp >= 0 ? "+" : ""}${fmt(r.playoff_vorp)}</span><span class="lbl">Playoff wk${(po.weeks || []).length ? " " + po.weeks[0] + "–" + po.weeks[po.weeks.length - 1] : ""}</span></span>` : ""}
         <span><span class="big">${fmt(r.points, 0)}</span><span class="lbl">Proj pts</span></span>
         <span><span class="big">${fmt(r.adp, 0)}</span><span class="lbl">ADP</span></span>
       </div>
@@ -316,6 +322,8 @@ function renderHero(s) {
 
 function renderAvailable(s) {
   const rows = s.available || [];
+  const po = s.playoff || {};
+  document.getElementById("th-dv").style.display = po.weight > 0 ? "" : "none";
   const ids = new Set(rows.map(p => p.canonical_id));
   const now = performance.now();
   // players that just vanished from the board → keep visible, greyed, ~4s
@@ -328,11 +336,12 @@ function renderAvailable(s) {
   }
   goneRows = goneRows.filter(g => g.until > now);
   const body = rows.map((p, i) => `
-    <tr>
+    <tr${p.schedule_note ? ` title="${esc(p.schedule_note)}"` : ""}>
       <td class="sub">${i + 1}</td>
-      <td><span class="pname">${esc(p.name)}</span> <span class="sub">${esc(p.team || "")}${p.bye ? " · " + esc(String(p.bye)) : ""}</span></td>
+      <td><span class="pname">${esc(p.name)}</span> <span class="sub">${esc(p.team || "")}${p.bye ? " · " + esc(String(p.bye)) : ""}${p.bye_overlap > 1 ? ` <span class="cliff-flag" title="bye shared with ${esc(String(p.bye_overlap))} of your starters">⚠bye</span>` : ""}</span></td>
       <td>${posChip(p.position)}</td>
       <td class="num">${p.vorp >= 0 ? "+" : ""}${fmt(p.vorp)}</td>
+      ${po.weight > 0 ? `<td class="num">${p.draft_value >= 0 ? "+" : ""}${fmt(p.draft_value)}${p.schedule_note ? " ✦" : ""}</td>` : ""}
       <td class="num score-cell">${fmt(p.score)}</td>
       <td><span class="need-tag need-${esc(p.need)}">${esc(p.need)}</span></td>
       <td class="num">${esc(String(p.tier))}</td>

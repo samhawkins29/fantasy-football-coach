@@ -19,8 +19,19 @@ value down toward zero, never flips orderings among below-replacement players.
 Tier cliffs ride along from the M4 board: an available player who is the *last
 of their tier* at the position is flagged with the size of the drop to the next
 tier — the §4.2 "reach for the cliff" pressure signal — and the recommendation
-narrates every factor (value, need, cliff, ADP fall) so the founder can trust
-the pick at a glance.
+narrates every factor (value, need, cliff, ADP fall, playoff schedule, bye
+stacking) so the founder can trust the pick at a glance.
+
+Step-5 additions, both nudges by design:
+
+* The value being weighted is the board's **draft value** (the season↔playoff
+  blend) when present, raw VORP otherwise — so a playoff emphasis set on the
+  board flows through the need weighting unchanged.
+* **Bye stacking**: drafting a player whose bye week is already shared by
+  several of *your* starters gets a small multiplicative penalty (the first
+  shared starter is free — byes collide in any roster; it's the pile-up that
+  costs a real week). Capped tight so it reorders near-ties, never overrides a
+  clear value gap.
 """
 
 from __future__ import annotations
@@ -59,6 +70,14 @@ NEED_WEIGHTS: dict[str, float] = {
     NEED_FLEX: 0.85,
     NEED_DEPTH: 0.55,
 }
+
+#: Bye-stacking nudge: sharing a bye with this many of your starters is free
+#: (one collision is unavoidable roster math)…
+BYE_STACK_FREE = 1
+#: …each starter beyond that costs this fraction of the positive score…
+BYE_PENALTY_STEP = 0.04
+#: …capped here so even a five-way pile-up stays a nudge, not a veto.
+BYE_PENALTY_MAX = 0.12
 
 
 # --------------------------------------------------------------------------- #
@@ -204,7 +223,7 @@ def compute_needs(slots: Sequence[SlotInstance]) -> RosterNeeds:
 
 @dataclass(slots=True)
 class RankedPlayer:
-    """A board entry re-scored by roster need, with its cliff context."""
+    """A board entry re-scored by roster need, with its cliff/bye context."""
 
     entry: BoardEntry
     score: float
@@ -212,6 +231,7 @@ class RankedPlayer:
     need: str
     cliff: bool = False
     cliff_drop: float | None = None
+    bye_overlap: int = 0
 
     def as_dict(self) -> dict[str, object]:
         """The snapshot/JSON shape the web page renders."""
@@ -224,6 +244,9 @@ class RankedPlayer:
             "bye": e.bye_week,
             "points": e.points,
             "vorp": e.vorp,
+            "draft_value": e.rank_value,
+            "playoff_vorp": e.playoff_vorp,
+            "schedule_note": e.schedule_note,
             "adp": e.adp,
             "tier": e.tier,
             "pos_rank": e.pos_rank,
@@ -234,6 +257,7 @@ class RankedPlayer:
             "need": self.need,
             "cliff": self.cliff,
             "cliff_drop": self.cliff_drop,
+            "bye_overlap": self.bye_overlap,
         }
 
 
@@ -246,22 +270,46 @@ class Recommendation:
 
 
 def rank_available(
-    board: ValueBoard, needs: RosterNeeds
+    board: ValueBoard,
+    needs: RosterNeeds,
+    *,
+    starter_bye_counts: Mapping[int, int] | None = None,
 ) -> list[RankedPlayer]:
     """Re-rank the available board by need-weighted score.
 
     ``board`` must already be the *available-only* board (drafted players
     filtered before the rebuild, so its baselines reflect the drained pool).
-    Score = ``weight × VORP`` for positive VORP, raw VORP otherwise — see the
-    module docstring for why negatives are never inflated.
+    Score = ``weight × draft value`` for positive value (VORP when the board
+    carries no schedule blend), raw value otherwise — see the module docstring
+    for why negatives are never inflated.
+
+    ``starter_bye_counts`` maps a bye week to how many of *your current
+    starters* share it; a positive score is nudged down when drafting the
+    player would pile a further starter onto an already-shared bye (module
+    docstring: first collision free, then ``BYE_PENALTY_STEP`` per extra
+    starter, capped at ``BYE_PENALTY_MAX``).
     """
+    bye_counts = starter_bye_counts or {}
     ranked: list[RankedPlayer] = []
     for entry in board.entries:
         need = needs.tag(entry.position)
         weight = NEED_WEIGHTS[need]
-        score = entry.vorp * weight if entry.vorp > 0 else entry.vorp
+        value = entry.rank_value
+        score = value * weight if value > 0 else value
+        overlap = bye_counts.get(entry.bye_week, 0) if entry.bye_week else 0
+        if score > 0 and overlap > BYE_STACK_FREE:
+            penalty = min(
+                BYE_PENALTY_MAX, BYE_PENALTY_STEP * (overlap - BYE_STACK_FREE)
+            )
+            score *= 1.0 - penalty
         ranked.append(
-            RankedPlayer(entry=entry, score=round(score, 2), weight=weight, need=need)
+            RankedPlayer(
+                entry=entry,
+                score=round(score, 2),
+                weight=weight,
+                need=need,
+                bye_overlap=overlap,
+            )
         )
 
     # Tier cliffs: last available player of their tier at the position.
@@ -290,8 +338,14 @@ def build_recommendation(
         return None
     best = ranked[0]
     e = best.entry
+    blended = e.draft_value is not None and abs(e.draft_value - e.vorp) >= 0.05
     reasons = [
-        f"Best weighted value on the board — VORP {e.vorp:+.1f}"
+        (
+            f"Best weighted value on the board — draft value {e.draft_value:+.1f} "
+            f"(season VORP {e.vorp:+.1f}, playoff-blended)"
+            if blended
+            else f"Best weighted value on the board — VORP {e.vorp:+.1f}"
+        )
         + ("" if e.overall_rank == 1 else f", #{e.overall_rank} by raw value")
     ]
     if best.need == NEED_STARTER:
@@ -304,6 +358,13 @@ def build_recommendation(
         reasons.append(
             f"Last of {e.position} tier {e.tier} — {best.cliff_drop:.0f} pt "
             "cliff to the next tier"
+        )
+    if e.schedule_note:
+        reasons.append(e.schedule_note[0].upper() + e.schedule_note[1:])
+    if best.bye_overlap > BYE_STACK_FREE and e.bye_week is not None:
+        reasons.append(
+            f"Bye {e.bye_week} already shared by {best.bye_overlap} of your "
+            "starters — nudged down, still the pick"
         )
     if e.adp is not None and current_pick is not None and current_pick - e.adp >= 3:
         reasons.append(

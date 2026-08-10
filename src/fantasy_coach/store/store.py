@@ -552,8 +552,9 @@ class CoachStore:
                     """
                     INSERT INTO value_board (
                       league_key, canonical_id, name, position, team, points, vorp,
+                      draft_value, playoff_vorp, schedule_note,
                       overall_rank, pos_rank, tier, value_source, adp, bye_week, built_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         league_key,
@@ -563,6 +564,9 @@ class CoachStore:
                         e.team,
                         e.points,
                         e.vorp,
+                        e.draft_value,
+                        e.playoff_vorp,
+                        e.schedule_note,
                         e.overall_rank,
                         e.pos_rank,
                         e.tier,
@@ -575,13 +579,16 @@ class CoachStore:
             self.conn.execute(
                 """
                 INSERT INTO board_meta (
-                  league_key, num_teams, baselines, scoring, skipped_no_signal, built_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                  league_key, num_teams, baselines, scoring, skipped_no_signal,
+                  playoff_weight, playoff_weeks, built_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (league_key) DO UPDATE SET
                   num_teams = excluded.num_teams,
                   baselines = excluded.baselines,
                   scoring = excluded.scoring,
                   skipped_no_signal = excluded.skipped_no_signal,
+                  playoff_weight = excluded.playoff_weight,
+                  playoff_weeks = excluded.playoff_weeks,
                   built_at = excluded.built_at
                 """,
                 (
@@ -590,6 +597,8 @@ class CoachStore:
                     json.dumps(board.baselines),
                     json.dumps(board.scoring),
                     board.skipped_no_signal,
+                    board.playoff_weight,
+                    json.dumps(board.playoff_weeks),
                     built_at,
                 ),
             )

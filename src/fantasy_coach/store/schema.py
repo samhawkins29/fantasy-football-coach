@@ -200,6 +200,16 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         )
         """,
     ),
+    # -- v2: schedule-aware board (step 5) — playoff/blended value columns ----
+    # ALTER TABLE ADD COLUMN has no IF NOT EXISTS in SQLite; apply_migrations
+    # tolerates "duplicate column name" so a crash mid-batch stays re-runnable.
+    (
+        "ALTER TABLE value_board ADD COLUMN draft_value REAL",
+        "ALTER TABLE value_board ADD COLUMN playoff_vorp REAL",
+        "ALTER TABLE value_board ADD COLUMN schedule_note TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE board_meta ADD COLUMN playoff_weight REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE board_meta ADD COLUMN playoff_weeks TEXT NOT NULL DEFAULT '[]'",
+    ),
 )
 
 #: The schema version an up-to-date store reports (``PRAGMA user_version``).
@@ -217,7 +227,9 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
     Applies only the batches beyond the file's recorded ``user_version`` —
     re-running against an up-to-date file executes nothing. Each batch commits
     atomically with its version bump, so a crash mid-migration re-runs that
-    batch (safe: every statement is ``IF NOT EXISTS``-guarded).
+    batch (safe: ``CREATE`` statements are ``IF NOT EXISTS``-guarded, and an
+    ``ALTER TABLE ADD COLUMN`` hitting an already-added column is skipped —
+    SQLite has no ``IF NOT EXISTS`` for columns, so the tolerance lives here).
     """
     version = schema_version(conn)
     for batch_number, statements in enumerate(MIGRATIONS, start=1):
@@ -225,6 +237,10 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
             continue
         with conn:  # one transaction per batch
             for statement in statements:
-                conn.execute(statement)
+                try:
+                    conn.execute(statement)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" not in str(exc):
+                        raise
             conn.execute(f"PRAGMA user_version = {batch_number}")
     return schema_version(conn)

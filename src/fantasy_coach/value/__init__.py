@@ -1,9 +1,12 @@
-"""M4 — the projection/value engine (framework §4.1–4.2).
+"""M4 — the projection/value engine (framework §4.1–4.2, + step-5 schedule).
 
 Turns stat-line projections + a league's exact :class:`LeagueSettings` into a
 ranked, cross-position VORP board: league-rescored points, roster-demand-derived
 replacement baselines (FLEX/superflex aware), gap-based tiers, and ADP/flat
-gap-fill for players the projection model can't see (rookies, K, DEF).
+gap-fill for players the projection model can't see (rookies, K, DEF). With a
+:class:`~fantasy_coach.ingest.schedule.SeasonSchedule` attached, the board also
+carries matchup-adjusted playoff VORP and a season↔playoff blended draft value
+(:mod:`fantasy_coach.value.schedule`).
 """
 
 from fantasy_coach.value.board import (
@@ -17,6 +20,12 @@ from fantasy_coach.value.board import (
     replacement_baselines,
     starter_demand,
 )
+from fantasy_coach.value.schedule import (
+    blend_value,
+    playoff_weeks,
+    schedule_note,
+    weekly_points,
+)
 from fantasy_coach.value.scoring import (
     YAHOO_STAT_KEYS,
     league_points,
@@ -25,6 +34,10 @@ from fantasy_coach.value.scoring import (
 )
 
 __all__ = [
+    "playoff_weeks",
+    "weekly_points",
+    "blend_value",
+    "schedule_note",
     "SOURCE_PROJECTION",
     "SOURCE_ADP",
     "SOURCE_FLAT",

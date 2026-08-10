@@ -56,6 +56,7 @@ from fantasy_coach.ingest.projections import (
     PROJECTION_NOTE,
     default_season,
 )
+from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.ingest.sources import ProjectionRecord, ProjectionSource
 from fantasy_coach.store.store import CoachStore
 from fantasy_coach.value.board import build_value_board
@@ -206,6 +207,8 @@ def warm_store(
     season: int | None = None,
     num_teams: int | None = None,
     adp_source: str = "yahoo",
+    schedule: SeasonSchedule | None = None,
+    playoff_weight: float = 0.0,
 ) -> WarmResult:
     """Warm the store for one league: persist every input, then rebuild+store
     the value board. The one command of the load path.
@@ -228,6 +231,11 @@ def warm_store(
         season: Projection season; defaults to the upcoming one.
         num_teams: Override for offline settings without ``max_teams``.
         adp_source: Label for the ADP rows written from ``players``.
+        schedule: Optional :class:`SeasonSchedule` (step 5) — the caller loads
+            it (``ScheduleSource.load``, cache-served offline) like every other
+            data object here. ``None`` → a pure season board, as before.
+        playoff_weight: Blend weight for the stored board's draft values
+            (0.0 keeps the board identical to the pre-step-5 output).
 
     Returns:
         A :class:`WarmResult` with per-table counts, refreshed scopes, and
@@ -308,6 +316,8 @@ def warm_store(
             settings,
             num_teams=num_teams,
             players=board_players or None,
+            schedule=schedule,
+            playoff_weight=playoff_weight,
         )
         result.board_entries = store.replace_board(league_key, board)
         result.skipped_no_signal = board.skipped_no_signal
