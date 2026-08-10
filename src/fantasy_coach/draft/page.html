@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy Coach — Draft Companion</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #12161f;
+    --panel-2: #171c28;
+    --line: #222938;
+    --text: #e8ecf4;
+    --muted: #8b94a7;
+    --faint: #5b6375;
+    --accent: #35d49a;
+    --accent-2: #4da3ff;
+    --warn: #f5a524;
+    --danger: #ef4666;
+    --qb: #ef4666; --rb: #2dd4a7; --wr: #4da3ff; --te: #f5a524;
+    --k: #a78bfa; --def: #94a3b8;
+    --radius: 12px;
+    font-size: 15px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(77,163,255,.08), transparent 60%),
+      radial-gradient(900px 400px at 10% -10%, rgba(53,212,154,.07), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding-bottom: 32px;
+  }
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 0 18px; }
+
+  /* ---------- top bar ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(11,14,20,.88); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar { display: flex; align-items: center; gap: 18px; padding: 10px 18px; max-width: 1500px; margin: 0 auto; flex-wrap: wrap; }
+  .brand { font-weight: 700; letter-spacing: .4px; font-size: 1.02rem; white-space: nowrap; }
+  .brand em { color: var(--accent); font-style: normal; }
+  .badge {
+    font-size: .68rem; font-weight: 700; letter-spacing: .12em; padding: 3px 9px;
+    border-radius: 999px; text-transform: uppercase;
+  }
+  .badge.live { background: rgba(239,70,102,.15); color: var(--danger); border: 1px solid rgba(239,70,102,.4); }
+  .badge.simulation { background: rgba(77,163,255,.14); color: var(--accent-2); border: 1px solid rgba(77,163,255,.4); }
+  .bar .league { color: var(--faint); font-size: .8rem; }
+  .bar .spacer { flex: 1; }
+  .pickmeta { display: flex; gap: 22px; align-items: baseline; }
+  .pickmeta .big { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pickmeta .lbl { color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .1em; display: block; }
+  .onclock.me .big { color: var(--accent); }
+  .fresh { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .78rem; white-space: nowrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .dot.pulse { animation: pulse 2.4s ease-in-out infinite; }
+  .stale-banner {
+    display: none; background: rgba(245,165,36,.12); color: var(--warn);
+    border-bottom: 1px solid rgba(245,165,36,.35);
+    text-align: center; font-size: .82rem; padding: 5px; font-weight: 600;
+  }
+  body.is-stale .stale-banner { display: block; }
+  body.is-stale .dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  /* ---------- layout ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 2fr) minmax(0, .95fr); gap: 16px; margin-top: 16px; align-items: start; }
+  @media (max-width: 1180px) { .grid { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } .col-side { grid-column: 1 / -1; } }
+  @media (max-width: 760px) { .grid { grid-template-columns: minmax(0,1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .panel h2 {
+    font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+    padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font-weight: 700;
+  }
+
+  /* ---------- hero ---------- */
+  .hero {
+    margin-top: 16px; border-radius: var(--radius); position: relative; overflow: hidden;
+    border: 1px solid rgba(53,212,154,.35);
+    background: linear-gradient(135deg, rgba(53,212,154,.12), rgba(77,163,255,.07) 55%, var(--panel));
+    display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 8px;
+    transition: filter .4s;
+  }
+  body.is-stale .hero { filter: grayscale(.85) brightness(.8); }
+  @media (max-width: 900px) { .hero { grid-template-columns: minmax(0,1fr); } }
+  .hero-main { padding: 18px 22px 20px; }
+  .hero-eyebrow { font-size: .7rem; font-weight: 800; letter-spacing: .22em; color: var(--accent); text-transform: uppercase; }
+  .hero-name { font-size: 2.15rem; font-weight: 800; line-height: 1.15; margin: 6px 0 4px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .hero-sub { color: var(--muted); font-size: .88rem; margin-bottom: 12px; }
+  .hero-stats { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 12px; }
+  .hero-stats .big { font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .hero-stats .lbl { display: block; color: var(--muted); font-size: .66rem; text-transform: uppercase; letter-spacing: .12em; margin-top: 2px; }
+  .reasons { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .reasons li { font-size: .86rem; color: var(--text); display: flex; gap: 8px; align-items: baseline; }
+  .reasons li::before { content: "▸"; color: var(--accent); }
+  .hero-side { padding: 16px 18px; border-left: 1px solid var(--line); }
+  @media (max-width: 900px) { .hero-side { border-left: 0; border-top: 1px solid var(--line); } }
+  .hero-side h3 { font-size: .68rem; color: var(--muted); letter-spacing: .14em; text-transform: uppercase; margin-bottom: 10px; }
+  .runner { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: .9rem; }
+  .runner:last-child { border-bottom: 0; }
+  .runner .score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .hero-empty { padding: 26px 22px; font-size: 1.1rem; color: var(--muted); }
+
+  /* ---------- position chips ---------- */
+  .pos { font-size: .66rem; font-weight: 800; padding: 2.5px 7px; border-radius: 6px; letter-spacing: .06em; color: #0b0e14; }
+  .pos.QB { background: var(--qb); } .pos.RB { background: var(--rb); } .pos.WR { background: var(--wr); }
+  .pos.TE { background: var(--te); } .pos.K { background: var(--k); } .pos.DEF { background: var(--def); }
+  .pos.unknown { background: var(--faint); }
+
+  /* ---------- available table ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+  thead th {
+    text-align: left; color: var(--faint); font-size: .64rem; text-transform: uppercase; letter-spacing: .1em;
+    padding: 7px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel);
+  }
+  tbody td { padding: 6.5px 10px; border-bottom: 1px solid rgba(34,41,56,.55); font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: rgba(77,163,255,.05); }
+  tbody tr.gone { opacity: .32; }
+  tbody tr.gone .pname { text-decoration: line-through; }
+  tbody tr { transition: opacity .8s; }
+  .pname { font-weight: 600; }
+  .sub { color: var(--faint); font-size: .74rem; }
+  .num { text-align: right; }
+  .score-cell { font-weight: 700; color: var(--accent); }
+  .need-tag { font-size: .64rem; padding: 2px 6px; border-radius: 5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+  .need-starter { background: rgba(53,212,154,.16); color: var(--accent); }
+  .need-flex { background: rgba(77,163,255,.15); color: var(--accent-2); }
+  .need-depth { background: rgba(139,148,167,.14); color: var(--muted); }
+  .cliff-flag { color: var(--warn); font-weight: 700; font-size: .74rem; white-space: nowrap; }
+
+  /* ---------- tiers ---------- */
+  .tier-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 12px; }
+  .tier-col h3 { font-size: .74rem; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .tier-col h3 .baseline { margin-left: auto; font-size: .64rem; color: var(--faint); font-weight: 400; }
+  .tier-group { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-bottom: 4px; background: var(--panel-2); }
+  .tier-head { font-size: .62rem; color: var(--faint); text-transform: uppercase; letter-spacing: .12em; padding: 4px 9px 2px; }
+  .tier-p { display: flex; gap: 8px; align-items: baseline; padding: 3.5px 9px; font-size: .8rem; }
+  .tier-p .v { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; font-size: .74rem; }
+  .tier-p.gone { opacity: .3; text-decoration: line-through; }
+  .cliff-gap {
+    display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: .64rem;
+    text-transform: uppercase; letter-spacing: .1em; padding: 3px 4px 5px; font-weight: 700;
+  }
+  .cliff-gap::before, .cliff-gap::after { content: ""; flex: 1; border-top: 1px dashed rgba(245,165,36,.45); }
+
+  /* ---------- roster ---------- */
+  .roster-list { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 5px; }
+  .rslot { display: flex; align-items: center; gap: 10px; padding: 6px 9px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); font-size: .85rem; }
+  .rslot .slot-lbl { width: 52px; font-size: .66rem; font-weight: 800; color: var(--muted); letter-spacing: .05em; }
+  .rslot.filled { border-color: rgba(53,212,154,.35); }
+  .rslot.empty { border-style: dashed; color: var(--faint); }
+  .rslot .rname { font-weight: 600; }
+  .rslot .rsub { margin-left: auto; color: var(--faint); font-size: .72rem; }
+
+  /* ---------- recent picks ---------- */
+  .recent-list { padding: 6px 12px 12px; display: flex; flex-direction: column; gap: 4px; max-height: 340px; overflow-y: auto; }
+  .rpick { display: flex; gap: 9px; align-items: baseline; font-size: .8rem; padding: 4px 8px; border-radius: 7px; }
+  .rpick .no { color: var(--faint); font-variant-numeric: tabular-nums; width: 44px; }
+  .rpick .who { margin-left: auto; color: var(--muted); font-size: .72rem; text-align: right; }
+  .rpick.mine { background: rgba(53,212,154,.1); border: 1px solid rgba(53,212,154,.3); }
+  .rpick.mine .who { color: var(--accent); font-weight: 700; }
+  .rpick.new { animation: slidein .5s ease-out; }
+  @keyframes slidein { from { transform: translateY(-6px); opacity: 0; } }
+
+  .foot { margin-top: 14px; color: var(--faint); font-size: .72rem; display: flex; gap: 18px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header>
+  <div class="stale-banner">⚠ STALE — no fresh poll from the draft room; do not act on this recommendation</div>
+  <div class="bar">
+    <span class="brand">🏈 FANTASY <em>COACH</em></span>
+    <span class="badge live" id="mode-badge">LIVE</span>
+    <span class="league" id="league"></span>
+    <span class="spacer"></span>
+    <span class="pickmeta">
+      <span><span class="lbl">Round · Pick</span><span class="big" id="round-pick">—</span></span>
+      <span class="onclock" id="onclock-wrap"><span class="lbl">On the clock</span><span class="big" id="onclock">—</span></span>
+      <span><span class="lbl">Your next pick</span><span class="big" id="mynext">—</span></span>
+    </span>
+    <span class="fresh"><span class="dot pulse" id="dot"></span><span id="age">connecting…</span></span>
+  </div>
+</header>
+
+<div class="wrap">
+  <section class="hero" id="hero"><div class="hero-empty">Waiting for the first poll…</div></section>
+
+  <div class="grid">
+    <section class="panel col-main">
+      <h2>Top available — need-weighted value</h2>
+      <div style="max-height: 72vh; overflow-y: auto;">
+        <table>
+          <thead><tr>
+            <th>#</th><th>Player</th><th></th><th class="num">VORP</th><th class="num">Score</th>
+            <th>Need</th><th class="num">Tier</th><th class="num">ADP</th><th></th>
+          </tr></thead>
+          <tbody id="avail"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel col-tiers">
+      <h2>Position tiers — cliffs marked</h2>
+      <div class="tier-cols" id="tiers"></div>
+    </section>
+
+    <aside class="col-side">
+      <section class="panel">
+        <h2 id="roster-title">Your roster</h2>
+        <div class="roster-list" id="roster"></div>
+      </section>
+      <section class="panel" style="margin-top: 14px;">
+        <h2>Recent picks</h2>
+        <div class="recent-list" id="recent"></div>
+      </section>
+    </aside>
+  </div>
+
+  <div class="foot">
+    <span id="foot-counts"></span>
+    <span id="foot-unmapped"></span>
+    <span>Auto-refreshes every 2s — leave this tab next to the Yahoo draft room.</span>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const posChip = (p) => `<span class="pos ${/^(QB|RB|WR|TE|K|DEF)$/.test(p) ? p : "unknown"}">${esc(p || "?")}</span>`;
+const fmt = (v, d=1) => (v === null || v === undefined) ? "—" : Number(v).toFixed(d);
+
+let lastFetchAt = null;     // performance.now() of last successful fetch
+let lastAge = null;         // server-reported age at fetch time
+let prevAvailIds = null;    // for fade-out of freshly drafted players
+let goneRows = [];          // [{html, until}]
+let prevPickCount = -1;
+
+async function refresh() {
+  let snap;
+  try {
+    const res = await fetch("/api/state", {cache: "no-store"});
+    snap = await res.json();
+  } catch (e) {
+    document.body.classList.add("is-stale");
+    return;
+  }
+  lastFetchAt = performance.now();
+  lastAge = snap.age_seconds ?? null;
+  document.body.classList.toggle("is-stale", !!snap.stale);
+  render(snap);
+}
+
+function render(s) {
+  $("mode-badge").textContent = (s.mode || "live").toUpperCase();
+  $("mode-badge").className = "badge " + (s.mode === "simulation" ? "simulation" : "live");
+  $("league").textContent = s.league_key || "";
+
+  const d = s.draft || {};
+  $("round-pick").textContent = d.complete
+    ? "Done"
+    : `R${d.round ?? "—"} · ${d.current_pick ?? "—"}${d.total_picks ? "/" + d.total_picks : ""}`;
+  const oc = d.on_the_clock;
+  $("onclock").textContent = d.complete ? "—" : (oc ? (oc.is_me ? "YOU" : oc.team) : "—");
+  $("onclock-wrap").className = "onclock" + (oc && oc.is_me ? " me" : "");
+  $("mynext").textContent = d.complete ? "—"
+    : (d.picks_until_mine === 0 ? "NOW"
+      : d.my_next_pick ? `#${d.my_next_pick} (${d.picks_until_mine} away)` : "—");
+
+  renderHero(s);
+  renderAvailable(s);
+  renderTiers(s);
+  renderRoster(s);
+  renderRecent(s, d);
+
+  $("foot-counts").textContent =
+    `${s.available_count ?? "—"} players still on the board · poll every ${fmt(s.poll_interval, 1)}s`;
+  $("foot-unmapped").textContent = s.unmapped_count
+    ? `⚠ ${s.unmapped_count} drafted id(s) unmapped (excluded by raw id)` : "";
+  prevPickCount = d.pick_count ?? prevPickCount;
+}
+
+function renderHero(s) {
+  const hero = $("hero");
+  if (s.draft && s.draft.complete) {
+    hero.innerHTML = `<div class="hero-empty">🏁 Draft complete — ${esc(String(s.draft.pick_count))} picks made. Good luck this season.</div>`;
+    return;
+  }
+  const r = s.recommendation;
+  if (!r) { hero.innerHTML = `<div class="hero-empty">No recommendation yet…</div>`; return; }
+  const runners = (s.runners_up || []).map(p => `
+    <div class="runner">${posChip(p.position)}<span>${esc(p.name)}</span>
+      <span class="score">${fmt(p.score)}</span></div>`).join("");
+  hero.innerHTML = `
+    <div class="hero-main">
+      <div class="hero-eyebrow">Best pick now</div>
+      <div class="hero-name">${esc(r.name)} ${posChip(r.position)}</div>
+      <div class="hero-sub">${esc(r.team || "")}${r.bye ? ` · bye ${esc(String(r.bye))}` : ""}
+        · ${esc(r.position)}${esc(String(r.pos_rank))} · tier ${esc(String(r.tier))}</div>
+      <div class="hero-stats">
+        <span><span class="big">${fmt(r.score)}</span><span class="lbl">Need-wtd score</span></span>
+        <span><span class="big">${r.vorp >= 0 ? "+" : ""}${fmt(r.vorp)}</span><span class="lbl">VORP</span></span>
+        <span><span class="big">${fmt(r.points, 0)}</span><span class="lbl">Proj pts</span></span>
+        <span><span class="big">${fmt(r.adp, 0)}</span><span class="lbl">ADP</span></span>
+      </div>
+      <ul class="reasons">${r.reasons.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
+    </div>
+    <div class="hero-side"><h3>Next best</h3>${runners || '<span class="sub">—</span>'}</div>`;
+}
+
+function renderAvailable(s) {
+  const rows = s.available || [];
+  const ids = new Set(rows.map(p => p.canonical_id));
+  const now = performance.now();
+  // players that just vanished from the board → keep visible, greyed, ~4s
+  if (prevAvailIds) {
+    for (const [cid, html] of prevAvailIds) {
+      if (!ids.has(cid) && !goneRows.some(g => g.cid === cid)) {
+        goneRows.push({cid, html, until: now + 4000});
+      }
+    }
+  }
+  goneRows = goneRows.filter(g => g.until > now);
+  const body = rows.map((p, i) => `
+    <tr>
+      <td class="sub">${i + 1}</td>
+      <td><span class="pname">${esc(p.name)}</span> <span class="sub">${esc(p.team || "")}${p.bye ? " · " + esc(String(p.bye)) : ""}</span></td>
+      <td>${posChip(p.position)}</td>
+      <td class="num">${p.vorp >= 0 ? "+" : ""}${fmt(p.vorp)}</td>
+      <td class="num score-cell">${fmt(p.score)}</td>
+      <td><span class="need-tag need-${esc(p.need)}">${esc(p.need)}</span></td>
+      <td class="num">${esc(String(p.tier))}</td>
+      <td class="num sub">${fmt(p.adp, 0)}</td>
+      <td>${p.cliff ? `<span class="cliff-flag" title="last of tier">⛰ −${fmt(p.cliff_drop, 0)}</span>` : ""}</td>
+    </tr>`);
+  const gone = goneRows.map(g => `<tr class="gone">${g.html}</tr>`);
+  $("avail").innerHTML = body.join("") + gone.join("");
+  prevAvailIds = new Map(rows.map((p, i) => {
+    const tr = $("avail").children[i];
+    return [p.canonical_id, tr ? tr.innerHTML : ""];
+  }));
+}
+
+function renderTiers(s) {
+  const tiers = s.tiers || {};
+  $("tiers").innerHTML = Object.entries(tiers).map(([pos, data]) => {
+    const groups = (data.groups || []).map((g, gi) => {
+      const players = g.players.map(p => `
+        <div class="tier-p">${posChip(pos)}<span>${esc(p.name)}</span>
+          <span class="v">${p.vorp >= 0 ? "+" : ""}${fmt(p.vorp)}</span></div>`).join("");
+      const nextG = data.groups[gi + 1];
+      const drop = nextG && g.players.length && nextG.players.length
+        ? (g.players[g.players.length - 1].vorp - nextG.players[0].vorp) : null;
+      return `
+        <div class="tier-group"><div class="tier-head">Tier ${esc(String(g.tier))}</div>${players}</div>
+        ${drop !== null && drop > 0 ? `<div class="cliff-gap">cliff −${fmt(drop, 0)}</div>` : ""}`;
+    }).join("");
+    return `<div class="tier-col">
+      <h3>${posChip(pos)} <span class="baseline">${data.baseline != null ? "repl " + fmt(data.baseline, 0) : ""}</span></h3>
+      ${groups || '<span class="sub">pool empty</span>'}</div>`;
+  }).join("");
+}
+
+function renderRoster(s) {
+  if (s.my_team_name) $("roster-title").textContent = `Your roster — ${s.my_team_name}`;
+  const slots = s.roster || [];
+  $("roster").innerHTML = slots.map(sl => {
+    const p = sl.player;
+    if (!p) return `<div class="rslot empty"><span class="slot-lbl">${esc(sl.label)}</span><span>— open —</span></div>`;
+    return `<div class="rslot filled"><span class="slot-lbl">${esc(sl.label)}</span>
+      ${posChip(p.position)}<span class="rname">${esc(p.name)}</span>
+      <span class="rsub">${esc(p.team || "")}${p.bye ? " · bye " + esc(String(p.bye)) : ""}</span></div>`;
+  }).join("") || '<span class="sub" style="padding: 4px 8px;">No slots (settings missing?)</span>';
+}
+
+function renderRecent(s, d) {
+  const isNew = (d.pick_count ?? 0) > prevPickCount && prevPickCount >= 0;
+  $("recent").innerHTML = (s.recent_picks || []).map((p, i) => `
+    <div class="rpick${p.is_me ? " mine" : ""}${isNew && i === 0 ? " new" : ""}">
+      <span class="no">${esc(String(p.pick))}·R${esc(String(p.round))}</span>
+      ${posChip(p.position)}<span>${esc(p.name)}</span>
+      <span class="who">${p.is_me ? "YOU" : esc(p.team)}</span>
+    </div>`).join("") || '<span class="sub" style="padding: 4px 8px;">No picks yet</span>';
+}
+
+function tickAge() {
+  if (lastFetchAt === null || lastAge === null) return;
+  const age = lastAge + (performance.now() - lastFetchAt) / 1000;
+  $("age").textContent = age < 1.2 ? "updated just now" : `updated ${age.toFixed(0)}s ago`;
+}
+
+refresh();
+setInterval(refresh, 2000);
+setInterval(tickAge, 500);
+</script>
+</body>
+</html>

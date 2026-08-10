@@ -37,6 +37,11 @@ fantasy-coach = "fantasy_coach.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The draft companion's browser page ships inside the package (M5) — stdlib
+# http.server serves it; no template engine, no static-dir config.
+"fantasy_coach.draft" = ["*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

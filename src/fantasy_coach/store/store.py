@@ -671,6 +671,19 @@ class CoachStore:
                 written += 1
         return written
 
+    def clear_draft_picks(self, league_key: str) -> int:
+        """Delete a league's recorded picks; return how many were removed.
+
+        The M5 live loop mirrors Yahoo's pick list with **rebuild semantics**
+        (clear + record every change) so a commissioner undo or auto-pick
+        correction can't leave a stale row claiming a player is gone.
+        """
+        with self.conn:
+            cursor = self.conn.execute(
+                "DELETE FROM draft_picks WHERE league_key = ?", (league_key,)
+            )
+        return cursor.rowcount
+
     def drafted_canonical_ids(self, league_key: str) -> set[str]:
         """Canonical ids already taken in a league's draft (the M5 hot set).
 

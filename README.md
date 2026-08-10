@@ -133,6 +133,8 @@ test path — but the CLI needs the package installed.)
 | `python -m fantasy_coach status` | Whoami / token status: shows Yahoo GUID, scope, and whether the access token is valid / near-expiry / expired. | None |
 | `python -m fantasy_coach logout` | Deletes the stored token file. | None |
 | `python -m fantasy_coach config` | Shows which config values are set (secrets masked) and whether OAuth is ready. | None |
+| `python -m fantasy_coach draft --league <key>` | **The live draft companion (M5).** Polls the Yahoo draft room every ~2.5s, rebuilds the drafted set (undo-safe), recomputes the available VORP board with baselines that shift as pools drain, weights it by your unfilled roster slots, and serves an auto-refreshing dark board page at `http://localhost:8787`. Auto-detects your team; seeds keepers from pre-draft rosters. | Polls `draftresults` (throttled) |
+| `python -m fantasy_coach draft --simulate` | The identical loop fed by a scripted snake draft generated from the stored board — the full offline dress rehearsal (page, roster fill, recommendations). `--sim-slot N` picks your slot, `--sim-speed K` reveals K picks per poll. | None |
 
 ---
 

@@ -1,6 +1,8 @@
 # Fantasy Coach — M1 (Auth / OAuth 2.0 + token store), M2 (Yahoo Fantasy read
 # client), and M3 (data ingestion + id crosswalk + external feeds) runtime + test
 # deps. M2 added no new dependencies; M3 adds the data-layer stack below.
+# M5 (live draft companion) adds none either: the local web layer is stdlib
+# http.server on purpose — no framework to install the week of the draft.
 # Version strings are lower bounds ("known-good floor"), not exact pins —
 # the framework flags version facts as [verify at setup]. Pin exactly before
 # a production/draft-day freeze.
