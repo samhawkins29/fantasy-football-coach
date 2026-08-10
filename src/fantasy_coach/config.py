@@ -24,6 +24,7 @@ DEFAULT_TOKEN_PATH = ".tokens.json"
 DEFAULT_SCOPE = "fspt-r"
 DEFAULT_PROJECTION_SOURCE = "nflverse"  # free, no key (framework §2.5 free-first)
 DEFAULT_CACHE_DIR = ".cache"
+DEFAULT_DB_PATH = "data/coach.sqlite3"  # single-file SQLite store (git-ignored)
 
 
 class ConfigError(RuntimeError):
@@ -48,6 +49,9 @@ class Config:
         projection_source: Which ProjectionSource the value engine uses —
             ``"nflverse"`` (free, default) or ``"fantasypros"`` (needs the key).
         cache_dir: Local data-cache directory (projections etc.; git-ignored).
+        db_path: The single-file SQLite data store (git-ignored via
+            ``*.sqlite3``) — league rules, players, ADP, projections, the
+            value board.
     """
 
     yahoo_client_id: str = ""
@@ -60,6 +64,7 @@ class Config:
     fantasypros_api_key: str = ""
     projection_source: str = DEFAULT_PROJECTION_SOURCE
     cache_dir: Path = field(default_factory=lambda: Path(DEFAULT_CACHE_DIR))
+    db_path: Path = field(default_factory=lambda: Path(DEFAULT_DB_PATH))
 
     # -- construction --------------------------------------------------------
 
@@ -107,6 +112,7 @@ class Config:
             projection_source=environ.get("PROJECTION_SOURCE", "").strip().lower()
             or DEFAULT_PROJECTION_SOURCE,
             cache_dir=Path(environ.get("FANTASY_COACH_CACHE_DIR", DEFAULT_CACHE_DIR)),
+            db_path=Path(environ.get("FANTASY_COACH_DB_PATH", DEFAULT_DB_PATH)),
         )
 
     # -- validation ----------------------------------------------------------

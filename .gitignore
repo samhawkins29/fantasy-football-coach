@@ -31,9 +31,12 @@ ENV/
 htmlcov/
 .cache/
 
-# ---- Local data / caches (future modules) ----
+# ---- Local data / caches ----
 *.sqlite
 *.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 data/cache/
 
 # ---- Editors / OS ----

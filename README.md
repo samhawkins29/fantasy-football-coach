@@ -172,6 +172,48 @@ online — projections are cached per season under `.cache/`, and every later
 `project()` is served from disk with zero network. Draft day never depends on a
 live nflverse fetch.
 
+### The data store (SQLite, queryable)
+
+Everything the draft needs lives in **one git-ignored SQLite file** —
+`data/coach.sqlite3` (override with `FANTASY_COACH_DB_PATH`): league rules,
+canonical players, ADP, projections, weekly stats history, and the computed
+value board, each stamped in `data_vintage` with when it was last refreshed.
+Warm it once pre-draft, then analyse from a REPL or notebook:
+
+```python
+from fantasy_coach.ingest.projections import NflverseProjectionSource
+from fantasy_coach.store import CoachStore, warm_store
+
+store = CoachStore()                                  # data/coach.sqlite3
+result = warm_store(store, settings,                  # settings from Yahoo (or built offline)
+                    projection_source=NflverseProjectionSource(),
+                    players=index.players.values())   # M3 crosswalk, optional
+print(result.summary())                               # counts + warnings + vintage
+
+store.get_board("449.l.123456", limit=15)             # the stored VORP board
+store.top_available("449.l.123456", 10)               # …minus drafted players (M5)
+store.adp_vs_vorp("449.l.123456")                     # market-vs-model value gaps
+store.player_summary("amon-ra")                       # one player, everything stored
+```
+
+Warming is re-runnable (rows upsert; the board snapshot replaces) and
+offline-friendly: projections come from the `.cache/` warm cache, and a missing
+Yahoo session degrades to warnings while prior rows — including persisted ADP,
+which the board's rookie/K/DEF gap-fill needs — survive. And it's *just*
+SQLite, so raw SQL works anywhere:
+
+```sql
+-- best remaining value by position and tier
+SELECT position, tier, COUNT(*) players, ROUND(MAX(vorp), 1) best_vorp
+FROM value_board WHERE league_key = '449.l.123456'
+GROUP BY position, tier ORDER BY position, tier;
+
+-- players the market drafts later than our model ranks them
+SELECT name, position, adp, overall_rank, ROUND(adp - overall_rank, 1) gap
+FROM value_board WHERE league_key = '449.l.123456' AND adp IS NOT NULL
+ORDER BY gap DESC LIMIT 20;
+```
+
 ---
 
 ## Authenticate for real
