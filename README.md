@@ -150,6 +150,27 @@ Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored):
 | `FANTASY_COACH_TOKEN_PATH` | No | Where tokens are stored. Default `.tokens.json`. |
 | `ODDS_API_KEY` | No | The Odds API key (later modules). |
 | `FANTASYPROS_API_KEY` | No | FantasyPros API key (later modules). |
+| `PROJECTION_SOURCE` | No | Which projection source the value engine uses: `nflverse` (free, default — the model in `ingest/projections.py`) or `fantasypros` (needs `FANTASYPROS_API_KEY`). |
+| `FANTASY_COACH_CACHE_DIR` | No | Local data-cache directory (season projection caches). Default `.cache` (git-ignored). |
+
+### Season projections (free, nflverse-based)
+
+`NflverseProjectionSource` is the default (free) projection source: a simple,
+transparent baseline that recency-weights the last three seasons of nflverse
+per-game production, regresses low-sample players toward damped positional
+priors, and multiplies by regressed projected games. It emits the **raw
+component stat line** (`pass_yds`, `pass_td`, `pass_int`, `rush_yds`, `rush_td`,
+`rec`, `rec_yds`, `rec_td`, `fum_lost`, `two_pt`, `games`) so the value engine
+rescoring uses *your* league's stat modifiers; `points` is only a half-PPR
+reference total. Every record is labelled a *model estimate (nflverse-based)*.
+Rookies and K/DEF are not covered (no nflverse history / no kicking stat lines)
+— the draft board fills those from ADP/market signals.
+
+**Pre-draft warm cache (framework §7):** run
+`NflverseProjectionSource().warm_cache()` (or any first `project()` call) while
+online — projections are cached per season under `.cache/`, and every later
+`project()` is served from disk with zero network. Draft day never depends on a
+live nflverse fetch.
 
 ---
 

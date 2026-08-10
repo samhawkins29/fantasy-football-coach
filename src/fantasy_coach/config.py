@@ -22,6 +22,8 @@ YAHOO_TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 
 DEFAULT_TOKEN_PATH = ".tokens.json"
 DEFAULT_SCOPE = "fspt-r"
+DEFAULT_PROJECTION_SOURCE = "nflverse"  # free, no key (framework §2.5 free-first)
+DEFAULT_CACHE_DIR = ".cache"
 
 
 class ConfigError(RuntimeError):
@@ -43,6 +45,9 @@ class Config:
         token_path: Path to the local token store JSON file (git-ignored).
         odds_api_key: Optional key for The Odds API (later modules).
         fantasypros_api_key: Optional FantasyPros API key (later modules).
+        projection_source: Which ProjectionSource the value engine uses —
+            ``"nflverse"`` (free, default) or ``"fantasypros"`` (needs the key).
+        cache_dir: Local data-cache directory (projections etc.; git-ignored).
     """
 
     yahoo_client_id: str = ""
@@ -53,6 +58,8 @@ class Config:
     token_path: Path = field(default_factory=lambda: Path(DEFAULT_TOKEN_PATH))
     odds_api_key: str = ""
     fantasypros_api_key: str = ""
+    projection_source: str = DEFAULT_PROJECTION_SOURCE
+    cache_dir: Path = field(default_factory=lambda: Path(DEFAULT_CACHE_DIR))
 
     # -- construction --------------------------------------------------------
 
@@ -97,6 +104,9 @@ class Config:
             token_path=Path(token_path),
             odds_api_key=environ.get("ODDS_API_KEY", "").strip(),
             fantasypros_api_key=environ.get("FANTASYPROS_API_KEY", "").strip(),
+            projection_source=environ.get("PROJECTION_SOURCE", "").strip().lower()
+            or DEFAULT_PROJECTION_SOURCE,
+            cache_dir=Path(environ.get("FANTASY_COACH_CACHE_DIR", DEFAULT_CACHE_DIR)),
         )
 
     # -- validation ----------------------------------------------------------

@@ -63,6 +63,17 @@ __all__ = [
 
 SLEEPER_BASE_URL = "https://api.sleeper.app/v1"
 
+#: nflverse's *current* weekly player-stats asset (release tag ``stats_player``,
+#: 2025 schema). ``nfl_data_py`` 0.3.3 still points at the retired
+#: ``player_stats/player_stats_{year}.parquet`` asset, which nflverse stopped
+#: publishing after 2024 — so 2025+ pulls 404 through the library and
+#: :meth:`NflverseSource.weekly_stats` falls back to this URL directly.
+#: (Verified 2026-08: old asset exists ≤2024 only; this one covers all years.)
+NFLVERSE_WEEKLY_STATS_URL = (
+    "https://github.com/nflverse/nflverse-data/releases/download/"
+    "stats_player/stats_player_week_{year}.parquet"
+)
+
 
 class SourceNotConfigured(RuntimeError):
     """Raised when a key-gated source is used without its credentials/config."""
@@ -94,6 +105,12 @@ class ProjectionRecord:
     it through the crosswalk. ``points`` is the source's own number *before* M4
     rescores it into the league's scoring (M4 §4.1 prefers rescoring raw stats,
     but a pre-scored consensus is still a useful blend input).
+
+    ``stats`` carries the raw projected component stat line when the source can
+    produce one (``pass_yds``/``pass_td``/``rush_yds``/``rec``/… — see
+    ``projections.PROJECTED_STAT_KEYS``), which is what lets M4 rescore through
+    the league's own ``stat_modifiers`` instead of trusting ``points``. Sources
+    that only have a pre-scored total leave it empty.
     """
 
     source: str
@@ -105,6 +122,7 @@ class ProjectionRecord:
     position: str = ""
     team: str = ""
     name: str = ""
+    stats: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -217,8 +235,33 @@ class NflverseSource:
         return self._fetch("ids")
 
     def weekly_stats(self, years: Sequence[int]) -> object:
-        """Per-player weekly box scores (``import_weekly_data``)."""
-        return self._fetch("weekly", list(years))
+        """Per-player weekly box scores (``import_weekly_data``).
+
+        ``nfl_data_py`` 0.3.3's asset URL is stale for 2025+ (see
+        :data:`NFLVERSE_WEEKLY_STATS_URL`), so when the *real* library path
+        404s we read the current nflverse parquet directly. Injected fetchers
+        never fall back — tests stay fully offline and failures stay loud.
+
+        Note the two vintages differ slightly in column names
+        (``recent_team``/``interceptions`` vs ``team``/``passing_interceptions``);
+        consumers handle both (see ``projections.PROJECTED_STAT_KEYS``).
+        """
+        try:
+            return self._fetch("weekly", list(years))
+        except Exception as exc:
+            from urllib.error import HTTPError  # noqa: PLC0415
+
+            if "weekly" in self._fetchers or not isinstance(exc, HTTPError):
+                raise
+            return self._weekly_stats_direct(years)
+
+    @staticmethod
+    def _weekly_stats_direct(years: Sequence[int]) -> object:
+        """Read nflverse's current weekly-stats parquet assets straight from GitHub."""
+        import pandas as pd  # noqa: PLC0415  (intentional lazy import)
+
+        frames = [pd.read_parquet(NFLVERSE_WEEKLY_STATS_URL.format(year=y)) for y in years]
+        return pd.concat(frames, ignore_index=True)
 
     def snap_counts(self, years: Sequence[int]) -> object:
         """Offensive/defensive snap counts (``import_snap_counts``)."""

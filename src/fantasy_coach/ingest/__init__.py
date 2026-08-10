@@ -16,6 +16,12 @@ the data". It has three parts:
   — nflverse + Sleeper live (free, no key), FantasyPros/Odds API/Open-Meteo
   wired but key-gated, all implementing the ``DataSource`` / ``ProjectionSource``
   protocols so M4/M11 can blend and reweight them.
+* **A concrete free projection model** (:mod:`~fantasy_coach.ingest.projections`)
+  — :class:`~fantasy_coach.ingest.projections.NflverseProjectionSource` derives
+  season stat-line projections from nflverse history (labelled "model estimate"),
+  cached locally so draft day needs zero network;
+  :func:`~fantasy_coach.ingest.projections.make_projection_source` picks the
+  configured source (free nflverse by default, FantasyPros when keyed).
 
 :func:`~fantasy_coach.ingest.index.build_player_index` assembles it all into a
 :class:`~fantasy_coach.ingest.index.PlayerIndex` — the object M4 consumes.
@@ -55,6 +61,15 @@ from fantasy_coach.ingest.crosswalk import (
     load_id_crosswalk,
 )
 from fantasy_coach.ingest.index import PlayerIndex, build_player_index
+from fantasy_coach.ingest.projections import (
+    PROJECTED_STAT_KEYS,
+    PROJECTION_NOTE,
+    REFERENCE_SCORING,
+    NflverseProjectionSource,
+    default_season,
+    make_projection_source,
+    score_stats,
+)
 from fantasy_coach.ingest.names import (
     CANONICAL_TEAMS,
     clean_name,
@@ -127,6 +142,14 @@ __all__ = [
     "TrendingPlayer",
     "ImpliedTotal",
     "WeatherReport",
+    # projections (the free ProjectionSource — M4's default input)
+    "NflverseProjectionSource",
+    "make_projection_source",
+    "score_stats",
+    "default_season",
+    "PROJECTED_STAT_KEYS",
+    "REFERENCE_SCORING",
+    "PROJECTION_NOTE",
     # index
     "PlayerIndex",
     "build_player_index",

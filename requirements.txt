@@ -25,6 +25,14 @@ numpy>=1.26                 # pandas' numeric core (explicit so the floor is vis
 
 # --- M3: nflverse backbone (nfl_data_py) — see NOTE below, intentionally NOT a
 # hard requirement here so `pip install -r requirements.txt` stays green. -------
+# The free projection source (ingest/projections.py) needs it installed for the
+# LIVE pull (warm_cache); once the per-season cache is warmed, draft-day project()
+# runs with zero network and does not need it.
+# NOTE (stale-URL gotcha, verified 2026-08): nflverse retired the old
+#   player_stats/player_stats_{year}.parquet release asset after 2024, so
+#   nfl_data_py 0.3.3's import_weekly_data 404s for 2025+. NflverseSource
+#   .weekly_stats() falls back to the current stats_player release asset
+#   automatically (see NFLVERSE_WEEKLY_STATS_URL in ingest/sources.py).
 # NOTE (install gotcha, verified 2026-07): nfl_data_py 0.3.3 hard-pins
 #   numpy<2.0 and pandas<2.0. Those have no wheels for Python 3.13/3.14, so a
 #   plain `pip install nfl_data_py` tries to BUILD old pandas from source and
