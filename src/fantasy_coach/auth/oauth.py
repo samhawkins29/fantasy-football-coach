@@ -35,7 +35,13 @@ class YahooOAuthClient:
         client_id: Yahoo app Client ID (Consumer Key).
         client_secret: Yahoo app Client Secret.
         redirect_uri: Registered HTTPS redirect URI (must match the app).
-        scope: OAuth scope — ``fspt-r`` (read) or ``fspt-w`` (read/write).
+        scope: OAuth scope. Default is empty = send NO ``scope`` parameter,
+            which is what the Fantasy API needs: Yahoo rejects ``fspt-r`` and
+            an empty ``scope=`` with ``invalid_scope``, and an ``openid``-only
+            token gets 401 ``additional_authorization_required`` from Fantasy.
+            Omitting the parameter yields a broad token that can access
+            Fantasy (same as yahoo_oauth/yahoofantasy). Set a value only if
+            you deliberately want a narrower token (e.g. ``openid``).
         http: Optional ``httpx.Client`` to use for token requests. If omitted,
             one is created lazily and owned by this instance. Inject a client
             backed by ``httpx.MockTransport`` in tests to avoid the network.
@@ -51,14 +57,17 @@ class YahooOAuthClient:
         client_secret: str,
         redirect_uri: str,
         *,
-        scope: str = "fspt-r",
+        scope: str | None = "",
         http: httpx.Client | None = None,
         timeout: float = 30.0,
     ) -> None:
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
-        self.scope = scope
+        # Blank/whitespace scope means "no scope" — the param must be omitted
+        # from the authorize URL entirely (Yahoo returns invalid_scope for an
+        # empty ``scope=``).
+        self.scope = (scope or "").strip()
         self._timeout = timeout
         self._http = http
         self._owns_http = http is None
@@ -104,7 +113,9 @@ class YahooOAuthClient:
         session = OAuth2Session(
             client_id=self.client_id,
             redirect_uri=self.redirect_uri,
-            scope=self.scope,
+            # None (not "") when no scope is configured, so oauthlib omits the
+            # ``scope`` parameter from the URL altogether.
+            scope=self.scope or None,
             state=state,
         )
         url, used_state = session.authorization_url(self.authorize_url)

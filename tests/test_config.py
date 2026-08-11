@@ -39,8 +39,8 @@ def test_defaults_when_env_empty():
 def test_values_are_stripped():
     cfg = Config.load(environ={"YAHOO_CLIENT_ID": "  cid  ", "YAHOO_SCOPE": "  "})
     assert cfg.yahoo_client_id == "cid"
-    # blank scope falls back to default
-    assert cfg.yahoo_scope == DEFAULT_SCOPE
+    # blank scope stays blank (= omit the scope param; needed for Fantasy)
+    assert cfg.yahoo_scope == ""
 
 
 def test_custom_token_path():

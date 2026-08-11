@@ -36,9 +36,35 @@ def test_create_authorization_url_contains_expected_params():
     assert params["client_id"] == ["my-id"]
     assert params["redirect_uri"] == ["https://localhost:8000/callback"]
     assert params["response_type"] == ["code"]
-    assert params["scope"] == ["fspt-r"]
     assert params["state"] == [state]
     assert state  # non-empty CSRF token generated
+
+
+def test_authorization_url_omits_scope_when_unset():
+    # No scope configured (the default): the URL must contain no scope
+    # parameter at all — Yahoo rejects an empty ``scope=`` with invalid_scope.
+    client = YahooOAuthClient("my-id", "sec", "https://localhost:8000/callback")
+    url, _ = client.create_authorization_url()
+    assert "scope=" not in url
+    assert "scope" not in parse_qs(urlparse(url).query)
+
+
+@pytest.mark.parametrize("blank", ["", "  ", None])
+def test_authorization_url_omits_scope_when_blank(blank):
+    client = YahooOAuthClient(
+        "my-id", "sec", "https://localhost:8000/callback", scope=blank
+    )
+    url, _ = client.create_authorization_url()
+    assert "scope=" not in url
+
+
+def test_authorization_url_includes_scope_when_configured():
+    client = YahooOAuthClient(
+        "my-id", "sec", "https://localhost:8000/callback", scope="openid"
+    )
+    url, _ = client.create_authorization_url()
+    assert "scope=openid" in url
+    assert parse_qs(urlparse(url).query)["scope"] == ["openid"]
 
 
 def test_create_authorization_url_honors_supplied_state():

@@ -21,7 +21,13 @@ YAHOO_AUTHORIZE_URL = "https://api.login.yahoo.com/oauth2/request_auth"
 YAHOO_TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 
 DEFAULT_TOKEN_PATH = ".tokens.json"
-DEFAULT_SCOPE = "fspt-r"
+# Default OAuth scope is EMPTY on purpose: the Yahoo Fantasy API needs a broad
+# token, which Yahoo only grants when the authorize URL carries NO scope
+# parameter at all (like yahoo_oauth/yahoofantasy). ``fspt-r`` and an empty
+# ``scope=`` both get invalid_scope; an ``openid`` token gets 401
+# additional_authorization_required from Fantasy. Empty here means "omit the
+# scope parameter entirely" (see YahooOAuthClient.create_authorization_url).
+DEFAULT_SCOPE = ""
 DEFAULT_PROJECTION_SOURCE = "nflverse"  # free, no key (framework §2.5 free-first)
 DEFAULT_CACHE_DIR = ".cache"
 DEFAULT_DB_PATH = "data/coach.sqlite3"  # single-file SQLite store (git-ignored)
@@ -40,7 +46,9 @@ class Config:
         yahoo_client_secret: Yahoo app Client Secret.
         yahoo_redirect_uri: Registered HTTPS redirect/callback URI. Must match
             the value configured on the Yahoo Developer app exactly.
-        yahoo_scope: OAuth scope — ``fspt-r`` (read) or ``fspt-w`` (read/write).
+        yahoo_scope: OAuth scope. Empty (the default) sends no ``scope``
+            parameter, which is required for Fantasy API access — see the
+            comment on ``DEFAULT_SCOPE``.
         yahoo_league_key: Optional league key (``{game_key}.l.{league_id}``);
             used by later modules, a placeholder for M1.
         token_path: Path to the local token store JSON file (git-ignored).
@@ -139,7 +147,9 @@ class Config:
             yahoo_redirect_uri=environ.get(
                 "YAHOO_REDIRECT_URI", "https://localhost:8000/callback"
             ).strip(),
-            yahoo_scope=environ.get("YAHOO_SCOPE", DEFAULT_SCOPE).strip() or DEFAULT_SCOPE,
+            # Blank stays blank (= omit the scope param); do NOT coerce to a
+            # non-empty fallback — no-scope is the working default for Fantasy.
+            yahoo_scope=environ.get("YAHOO_SCOPE", DEFAULT_SCOPE).strip(),
             yahoo_league_key=environ.get("YAHOO_LEAGUE_KEY", "").strip(),
             token_path=Path(token_path),
             odds_api_key=environ.get("ODDS_API_KEY", "").strip(),

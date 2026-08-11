@@ -149,7 +149,7 @@ Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored):
 | `YAHOO_CLIENT_ID` | **Yes** | Yahoo app Client ID (Consumer Key). |
 | `YAHOO_CLIENT_SECRET` | **Yes** | Yahoo app Client Secret. |
 | `YAHOO_REDIRECT_URI` | **Yes** | Registered HTTPS redirect URI. Must match the app exactly. Default `https://localhost:8000/callback`. |
-| `YAHOO_SCOPE` | No | `fspt-r` (read, default) or `fspt-w` (read/write — set lineups, add/drop). Start read-only. |
+| `YAHOO_SCOPE` | No | Leave **empty** (the default): the authorize URL then carries no `scope` parameter, which is required to get a token the Fantasy API accepts (Yahoo rejects `fspt-r`/empty `scope=` with `invalid_scope`; an `openid` token gets 401 from Fantasy). Set only if you want a narrower non-Fantasy token. |
 | `YAHOO_LEAGUE_KEY` | No | League key `{game_key}.l.{league_id}` (e.g. `449.l.123456`). Placeholder for later modules; discover it after login. |
 | `FANTASY_COACH_TOKEN_PATH` | No | Where tokens are stored. Default `.tokens.json`. |
 | `ODDS_API_KEY` | No | The Odds API key (later modules). |
@@ -262,7 +262,7 @@ When you're ready to connect a real Yahoo account:
    YAHOO_CLIENT_ID=<your client id>
    YAHOO_CLIENT_SECRET=<your client secret>
    YAHOO_REDIRECT_URI=https://localhost:8000/callback
-   YAHOO_SCOPE=fspt-r
+   YAHOO_SCOPE=
    ```
    That is the **minimum** needed to authenticate: `YAHOO_CLIENT_ID`,
    `YAHOO_CLIENT_SECRET`, and a `YAHOO_REDIRECT_URI` that matches the app.
