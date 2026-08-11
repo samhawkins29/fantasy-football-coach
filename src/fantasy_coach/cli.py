@@ -413,6 +413,37 @@ def _load_durability(config: Config, *, refresh: bool = False):
         return None
 
 
+def _crosswalk_players(yahoo_players):
+    """Run the M3 crosswalk over a pulled Yahoo player universe.
+
+    Resolves every Yahoo identity through the DynastyProcess id map (a live
+    ``nfl_data_py.import_ids()`` pull) and attaches Yahoo ADP, returning the
+    ``players=`` input :func:`warm_store` needs. This is what stamps
+    ``yahoo_id`` onto the store's player rows — without it, live draft picks
+    (which arrive as Yahoo ids) cannot resolve to board identities. Raises on
+    failure; callers degrade to a warning and the store's prior rows.
+    """
+    from fantasy_coach.ingest import IdResolver, build_player_index, load_id_crosswalk
+
+    crosswalk = load_id_crosswalk()
+    index = build_player_index(
+        (p.identity() for p in yahoo_players), IdResolver(crosswalk)
+    )
+    index.attach_yahoo_market(
+        {
+            p.player_id: {"adp": p.average_draft_pick}
+            for p in yahoo_players
+            if p.player_id
+        }
+    )
+    stats = index.report.summary()
+    console.print(
+        f"[dim]  crosswalk: {stats['matched']}/{stats['total']} matched "
+        f"({stats['unmatched']} unmatched, {stats['needs_review']} to review)[/]"
+    )
+    return list(index.players.values())
+
+
 def _vintage_table(store, title: str) -> None:
     """Print the store's data_vintage rows as a rich table."""
     rows = store.vintage()
@@ -523,6 +554,7 @@ def refresh(
 
     # 5. Yahoo statuses + ADP (live during drafts; needs auth).
     settings = store.league_settings(league_key) if league_key else None
+    cplayers = None
     if not skip_yahoo and config.has_oauth_credentials and league_key:
         try:
             from fantasy_coach.auth.session import get_authed_client
@@ -537,12 +569,25 @@ def refresh(
                 out=("draft_analysis",),
                 max_players=max_yahoo_players,
             )
-            by_yahoo = {
-                row["yahoo_id"]: row["canonical_id"]
-                for row in store.sql(
-                    "SELECT yahoo_id, canonical_id FROM players WHERE yahoo_id IS NOT NULL"
+            # Crosswalk the pulled universe so player rows carry yahoo_ids
+            # (what live picks resolve through); fall back to prior rows.
+            try:
+                cplayers = _crosswalk_players(players)
+                by_yahoo = {
+                    p.ids.yahoo_id: p.canonical_id
+                    for p in cplayers
+                    if p.ids.yahoo_id
+                }
+            except Exception as exc:
+                warnings.append(
+                    f"id crosswalk failed ({exc}); resolving via stored player rows"
                 )
-            }
+                by_yahoo = {
+                    row["yahoo_id"]: row["canonical_id"]
+                    for row in store.sql(
+                        "SELECT yahoo_id, canonical_id FROM players WHERE yahoo_id IS NOT NULL"
+                    )
+                }
             yahoo_reports: dict[str, InjuryReport] = {}
             adp_rows = []
             for p in players:
@@ -579,6 +624,7 @@ def refresh(
             store,
             settings,
             projection_source=projection_source,
+            players=cplayers,
             schedule=schedule,
             playoff_weight=config.playoff_emphasis,
             durability=durability,
@@ -616,8 +662,11 @@ def _build_sim_loop(
     settings = store.league_settings(league_key)
     if settings is None:
         console.print(
-            f"[bold red]No stored settings for {league_key}.[/] Warm the store "
-            "first (simulation runs entirely from the store)."
+            f"[bold red]No stored settings for {league_key}[/] in "
+            f"[cyan]{config.db_path}[/]. Warm the store first (simulation runs "
+            "entirely from the store) — and note the path is relative to the "
+            "current directory: run from the project root or set "
+            "FANTASY_COACH_DB_PATH."
         )
         raise typer.Exit(code=1)
     num_teams = settings.max_teams or 12
@@ -667,9 +716,25 @@ def _build_live_loop(
 
     schedule = _load_schedule(config, refresh=warm)
     if warm:
+        # Crosswalk the league's player universe so store rows carry yahoo_ids
+        # — the id space live draft picks arrive in. Degrades to prior rows.
+        players = None
+        try:
+            console.print(f"[dim]Crosswalking {league_key} players (Yahoo → canonical ids)…[/]")
+            players = _crosswalk_players(
+                yahoo.get_players(
+                    league_key, sort="OR", out=("draft_analysis",), max_players=400
+                )
+            )
+        except Exception as exc:
+            console.print(
+                f"[yellow]player crosswalk failed ({exc}) — keeping prior player "
+                "rows; live picks resolve only if a past warm stamped yahoo ids[/]"
+            )
         result = warm_store(
             store, settings,
             projection_source=NflverseProjectionSource(cache_dir=config.cache_dir),
+            players=players,
             schedule=schedule,
             playoff_weight=playoff_weight,
             durability=_load_durability(config),

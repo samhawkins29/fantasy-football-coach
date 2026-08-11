@@ -74,3 +74,43 @@ def test_login_without_creds_exits_nonzero(monkeypatch, tmp_path):
     result = runner.invoke(app, ["login"])
     assert result.exit_code == 1
     assert "Configuration error" in result.stdout
+
+
+def test_crosswalk_players_stamps_yahoo_ids(monkeypatch, id_map_rows):
+    """_crosswalk_players resolves Yahoo identities and attaches ADP — the
+    warm-path input that lets live picks (Yahoo ids) resolve to board rows."""
+    from fantasy_coach import cli
+    from fantasy_coach.ingest.crosswalk import load_id_crosswalk
+
+    from .conftest import make_identity
+
+    class StubYahooPlayer:
+        def __init__(self, yahoo_id, name, team, position, adp):
+            self.player_id = yahoo_id
+            self.average_draft_pick = adp
+            self._identity = make_identity(
+                yahoo_player_id=yahoo_id, full_name=name,
+                team_abbr=team, position=position,
+            )
+
+        def identity(self):
+            return self._identity
+
+    monkeypatch.setattr(
+        "fantasy_coach.ingest.load_id_crosswalk",
+        lambda: load_id_crosswalk(rows=id_map_rows),
+    )
+    players = cli._crosswalk_players(
+        [
+            StubYahooPlayer("30123", "Patrick Mahomes", "KC", "QB", 21.4),
+            StubYahooPlayer("45001", "Freshman Rookie", "NYJ", "WR", None),
+        ]
+    )
+
+    by_yahoo = {p.ids.yahoo_id: p for p in players}
+    mahomes = by_yahoo["30123"]
+    assert mahomes.canonical_id == "00-0033873"  # gsis hub id from the map
+    assert mahomes.ids.sleeper_id  # spoke ids ride along for status merges
+    assert mahomes.market.adp == 21.4
+    # Unresolved players still carry their yahoo_id, so the pick resolves.
+    assert by_yahoo["45001"].canonical_id.startswith("UNK_")

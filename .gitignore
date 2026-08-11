@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+App ID yahoo.txt
 .tokens.json
 token.json
 *.token

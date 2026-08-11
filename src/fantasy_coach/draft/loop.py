@@ -391,6 +391,19 @@ class DraftLoop:
     def _team_name(self, team_key: str) -> str:
         return self._team_names.get(team_key) or team_key.rsplit(".", 1)[-1]
 
+    def _bye_for(self, p: CanonicalPlayer) -> int | None:
+        """A player's bye week, falling back to the schedule's team bye.
+
+        Offline stores synthesize players from projections and carry no
+        per-player byes — without the fallback the bye-stacking nudge could
+        never fire in a simulated dress rehearsal.
+        """
+        if p.bye_week is not None:
+            return p.bye_week
+        if self._schedule is not None and p.team:
+            return self._schedule.bye_week(p.team)
+        return None
+
     def _my_roster_infos(self) -> list[dict[str, object]]:
         """Display dicts for my keepers + picks, in acquisition order."""
         infos: list[dict[str, object]] = []
@@ -404,7 +417,7 @@ class DraftLoop:
                     "name": p.name,
                     "position": p.position,
                     "team": p.team,
-                    "bye": p.bye_week,
+                    "bye": self._bye_for(p),
                 }
             )
         for _ in range(self.state.my_unmapped_count()):
