@@ -47,7 +47,14 @@ class Config:
         odds_api_key: Optional key for The Odds API (later modules).
         fantasypros_api_key: Optional FantasyPros API key (later modules).
         projection_source: Which ProjectionSource the value engine uses —
-            ``"nflverse"`` (free, default) or ``"fantasypros"`` (needs the key).
+            ``"nflverse"`` (free, default), ``"consensus"`` (blends the
+            nflverse model with market-implied ADP points — enhancement 1,
+            off unless selected), or ``"fantasypros"`` (needs the key).
+        consensus_model_weight: Blend weight for the nflverse model when
+            ``PROJECTION_SOURCE=consensus`` (default 0.7). Renormalized over
+            the signals present per player.
+        consensus_market_weight: Blend weight for the market/ADP-implied
+            signal in the consensus blend (default 0.3).
         playoff_emphasis: The step-5 playoff blend weight ``w`` in
             ``(1−w)·season VORP + w·playoff strength``. ``0.0`` (default)
             keeps the board pure season value — the schedule layer is
@@ -72,6 +79,8 @@ class Config:
     odds_api_key: str = ""
     fantasypros_api_key: str = ""
     projection_source: str = DEFAULT_PROJECTION_SOURCE
+    consensus_model_weight: float = 0.7
+    consensus_market_weight: float = 0.3
     playoff_emphasis: float = 0.0
     injury_emphasis: float = 0.0
     cache_dir: Path = field(default_factory=lambda: Path(DEFAULT_CACHE_DIR))
@@ -109,10 +118,10 @@ class Config:
 
         token_path = environ.get("FANTASY_COACH_TOKEN_PATH", DEFAULT_TOKEN_PATH)
 
-        def emphasis(var: str) -> float:
+        def emphasis(var: str, default: float = 0.0) -> float:
             raw = environ.get(var, "").strip()
             try:
-                value = float(raw) if raw else 0.0
+                value = float(raw) if raw else default
             except ValueError:
                 raise ConfigError(f"{var} must be a number in [0, 1], got {raw!r}.")
             if not 0.0 <= value <= 1.0:
@@ -121,6 +130,8 @@ class Config:
 
         playoff_emphasis = emphasis("PLAYOFF_EMPHASIS")
         injury_emphasis = emphasis("INJURY_EMPHASIS")
+        consensus_model_weight = emphasis("CONSENSUS_MODEL_WEIGHT", 0.7)
+        consensus_market_weight = emphasis("CONSENSUS_MARKET_WEIGHT", 0.3)
 
         return cls(
             yahoo_client_id=environ.get("YAHOO_CLIENT_ID", "").strip(),
@@ -135,6 +146,8 @@ class Config:
             fantasypros_api_key=environ.get("FANTASYPROS_API_KEY", "").strip(),
             projection_source=environ.get("PROJECTION_SOURCE", "").strip().lower()
             or DEFAULT_PROJECTION_SOURCE,
+            consensus_model_weight=consensus_model_weight,
+            consensus_market_weight=consensus_market_weight,
             playoff_emphasis=playoff_emphasis,
             injury_emphasis=injury_emphasis,
             cache_dir=Path(environ.get("FANTASY_COACH_CACHE_DIR", DEFAULT_CACHE_DIR)),

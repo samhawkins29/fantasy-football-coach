@@ -439,21 +439,51 @@ class NflverseProjectionSource:
             return None  # corrupt cache -> treat as absent, recompute live
 
 
-def make_projection_source(config: object) -> ProjectionSource:
+def make_projection_source(config: object, *, market: object = None) -> ProjectionSource:
     """Build the configured :class:`ProjectionSource` (framework §2.5 free-first).
 
     Selection comes from ``Config.projection_source`` (env ``PROJECTION_SOURCE``):
-    ``"nflverse"`` (default, free) or ``"fantasypros"`` (needs an API key — slots
-    in later with zero downstream changes, which is the point of the protocol).
+    ``"nflverse"`` (default, free), ``"consensus"`` (enhancement 1 — blends the
+    nflverse model with market-implied ADP points, weights from
+    ``CONSENSUS_MODEL_WEIGHT``/``CONSENSUS_MARKET_WEIGHT``), or ``"fantasypros"``
+    (needs an API key — slots in later with zero downstream changes, which is
+    the point of the protocol).
+
+    ``market`` is the consensus blend's ADP input — ``{gsis_id: adp}`` or a
+    lazy zero-arg callable returning one (see
+    :func:`~fantasy_coach.ingest.consensus.market_adp_from_players`). Ignored
+    by the single-source kinds, so callers can always pass it.
     """
     kind = str(getattr(config, "projection_source", "") or "nflverse").strip().lower()
+    cache_dir = getattr(config, "cache_dir", None)
     if kind in ("nflverse", "free"):
-        cache_dir = getattr(config, "cache_dir", None)
         if cache_dir is not None:
             return NflverseProjectionSource(cache_dir=Path(cache_dir))
         return NflverseProjectionSource()
+    if kind == "consensus":
+        # Lazy import: the consensus module imports this one (the model anchor).
+        from fantasy_coach.ingest.consensus import ConsensusProjectionSource  # noqa: PLC0415
+
+        kwargs: dict[str, object] = {}
+        if cache_dir is not None:
+            kwargs["model"] = NflverseProjectionSource(cache_dir=Path(cache_dir))
+            kwargs["cache_dir"] = Path(cache_dir)
+        fp_key = str(getattr(config, "fantasypros_api_key", "") or "")
+        if fp_key:
+            # The paid slot: keyed FantasyPros joins the blend (records must be
+            # gsis-keyed to contribute; unresolved ones are skipped with a warning).
+            kwargs["extra_sources"] = (FantasyProsSource(api_key=fp_key),)
+        return ConsensusProjectionSource(
+            market=market,
+            weights={
+                "model": float(getattr(config, "consensus_model_weight", 0.7)),
+                "market": float(getattr(config, "consensus_market_weight", 0.3)),
+            },
+            **kwargs,  # type: ignore[arg-type]
+        )
     if kind == "fantasypros":
         return FantasyProsSource(api_key=str(getattr(config, "fantasypros_api_key", "") or ""))
     raise ValueError(
-        f"Unknown PROJECTION_SOURCE {kind!r} — expected 'nflverse' (free, default) or 'fantasypros'."
+        f"Unknown PROJECTION_SOURCE {kind!r} — expected 'nflverse' (free, default), "
+        "'consensus' (model+market blend), or 'fantasypros'."
     )

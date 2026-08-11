@@ -497,12 +497,13 @@ def refresh(
     Every step degrades to a warning; whatever cannot refresh keeps its prior
     rows and its prior (visible) vintage.
     """
+    from fantasy_coach.ingest.consensus import market_adp_from_players
     from fantasy_coach.ingest.injury import (
         InjuryReport,
         SleeperStatusSource,
         normalize_status,
     )
-    from fantasy_coach.ingest.projections import NflverseProjectionSource, default_season
+    from fantasy_coach.ingest.projections import default_season, make_projection_source
     from fantasy_coach.ingest.schedule import ScheduleSource
     from fantasy_coach.store import CoachStore, warm_store
 
@@ -518,11 +519,17 @@ def refresh(
     _vintage_table(store, "Before refresh")
     warnings: list[str] = []
 
-    # 1. nflverse projections (periodic source — recomputed from latest data).
-    console.print(f"[dim]Refreshing projections for {season}…[/]")
-    projection_source = NflverseProjectionSource(cache_dir=config.cache_dir)
+    # 1. Projections (periodic source — recomputed from latest data). The
+    #    configured source is built here: consensus reads the store's current
+    #    ADP lazily (whatever a prior warm/refresh persisted).
+    projection_source = make_projection_source(
+        config, market=lambda: market_adp_from_players(store.canonical_players())
+    )
+    console.print(f"[dim]Refreshing {projection_source.name} projections for {season}…[/]")
     try:
-        projection_source.warm_cache(season)
+        warm = getattr(projection_source, "warm_cache", None)
+        if callable(warm):
+            warm(season)
     except Exception as exc:
         warnings.append(f"projections refresh failed ({exc}); cache/store rows kept")
 
@@ -700,8 +707,9 @@ def _build_live_loop(
     from fantasy_coach.auth.session import get_authed_client
     from fantasy_coach.clients.yahoo import YahooClient
     from fantasy_coach.draft import DraftLoop, YahooPickSource
+    from fantasy_coach.ingest.consensus import market_adp_from_players
     from fantasy_coach.ingest.injury import SleeperStatusSource
-    from fantasy_coach.ingest.projections import NflverseProjectionSource
+    from fantasy_coach.ingest.projections import make_projection_source
     from fantasy_coach.store import warm_store
 
     try:
@@ -731,9 +739,16 @@ def _build_live_loop(
                 f"[yellow]player crosswalk failed ({exc}) — keeping prior player "
                 "rows; live picks resolve only if a past warm stamped yahoo ids[/]"
             )
+        # Consensus (when selected) blends against the freshest ADP on hand:
+        # the just-crosswalked players, else whatever the store already holds.
         result = warm_store(
             store, settings,
-            projection_source=NflverseProjectionSource(cache_dir=config.cache_dir),
+            projection_source=make_projection_source(
+                config,
+                market=lambda: market_adp_from_players(
+                    players if players is not None else store.canonical_players()
+                ),
+            ),
             players=players,
             schedule=schedule,
             playoff_weight=playoff_weight,

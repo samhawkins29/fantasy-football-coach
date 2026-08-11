@@ -111,6 +111,11 @@ class ProjectionRecord:
     ``projections.PROJECTED_STAT_KEYS``), which is what lets M4 rescore through
     the league's own ``stat_modifiers`` instead of trusting ``points``. Sources
     that only have a pre-scored total leave it empty.
+
+    ``inputs`` is the honesty label for blended sources: which underlying
+    signals actually contributed to this record (``("model", "market")`` …).
+    Single-source records leave it empty — the ``source`` field already says
+    everything.
     """
 
     source: str
@@ -123,6 +128,7 @@ class ProjectionRecord:
     team: str = ""
     name: str = ""
     stats: dict[str, float] = field(default_factory=dict)
+    inputs: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

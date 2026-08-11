@@ -66,6 +66,11 @@ and recomputes the recommendation after every pick. Undos heal themselves.
 
 Both weights default to `PLAYOFF_EMPHASIS` / `INJURY_EMPHASIS` in `.env` (0.0).
 
+Optional: `PROJECTION_SOURCE=consensus` in `.env` blends the nflverse model
+with market-implied (ADP-calibrated) points before the board is built — set it
+**before** running `refresh` so the consensus cache warms; leave it unset for
+the certified single-source behavior (README "Consensus projections").
+
 ## What can go wrong
 
 1. **"No stored settings" / empty board** — you ran from the wrong directory,

@@ -154,7 +154,9 @@ Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored):
 | `FANTASY_COACH_TOKEN_PATH` | No | Where tokens are stored. Default `.tokens.json`. |
 | `ODDS_API_KEY` | No | The Odds API key (later modules). |
 | `FANTASYPROS_API_KEY` | No | FantasyPros API key (later modules). |
-| `PROJECTION_SOURCE` | No | Which projection source the value engine uses: `nflverse` (free, default — the model in `ingest/projections.py`) or `fantasypros` (needs `FANTASYPROS_API_KEY`). |
+| `PROJECTION_SOURCE` | No | Which projection source the value engine uses: `nflverse` (free, default — the model in `ingest/projections.py`), `consensus` (blends the nflverse model with market-implied ADP points — see below), or `fantasypros` (needs `FANTASYPROS_API_KEY`). |
+| `CONSENSUS_MODEL_WEIGHT` | No | Consensus blend weight for the nflverse model, in [0,1]. Default `0.7`. Weights renormalize over the signals each player actually has. |
+| `CONSENSUS_MARKET_WEIGHT` | No | Consensus blend weight for the market/ADP-implied signal, in [0,1]. Default `0.3`. |
 | `PLAYOFF_EMPHASIS` | No | Playoff blend weight `w` in [0,1] (step 5): draft value = `(1−w)·season VORP + w·playoff strength`. Default `0` (pure season value). |
 | `INJURY_EMPHASIS` | No | Injury/durability discount weight in [0,1] (step 6). Default `0`: risk flags are shown but values/ranks never move; `0.5–1.0` shades Out/IR/Questionable players and chronic games-missers down by the documented, clamped discounts. |
 | `FANTASY_COACH_CACHE_DIR` | No | Local data-cache directory (season projection caches). Default `.cache` (git-ignored). |
@@ -177,6 +179,26 @@ Rookies and K/DEF are not covered (no nflverse history / no kicking stat lines)
 online — projections are cached per season under `.cache/`, and every later
 `project()` is served from disk with zero network. Draft day never depends on a
 live nflverse fetch.
+
+### Consensus projections (opt-in blend — enhancement 1)
+
+Set `PROJECTION_SOURCE=consensus` to blend the nflverse model with a
+**market-implied points estimate calibrated from ADP** (Yahoo `draft_analysis`
+ADP — already ingested; the field's collective draft wisdom as an independent
+signal). The blend fits `points ≈ a + b·ln(adp)` per position on players that
+have both signals, then takes a weighted mean
+(`CONSENSUS_MODEL_WEIGHT`/`CONSENSUS_MARKET_WEIGHT`, default `0.7/0.3`,
+renormalized over whatever signals a player actually has — a single-signal
+player passes through untouched, and market-only players keep flowing through
+the board's own ADP gap-fill). Records carry an `inputs` label
+(`model+market` / `model`) and the store note says *consensus estimate* — a
+blend of estimates is still an estimate. A keyed FantasyPros source slots into
+the blend via the same `ProjectionSource` protocol with no downstream change.
+The consensus caches per season like the model (zero network on draft day), and
+any missing source degrades to the rest with a warning. **Off by default:**
+leave `PROJECTION_SOURCE` unset and the board is bit-identical to the
+single-source nflverse model. (Sleeper exposes no documented projections
+endpoint, and ESPN/CBS/NFL scraping is a ToS gray area — neither is used.)
 
 ### The data store (SQLite, queryable)
 

@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from fantasy_coach.clients.models import LeagueSettings
 from fantasy_coach.ingest.canonical import CanonicalPlayer, ExternalIds
 from fantasy_coach.ingest.names import normalize_position, normalize_team
+from fantasy_coach.ingest.consensus import CONSENSUS_NOTE
 from fantasy_coach.ingest.projections import (
     PROJECTED_STAT_KEYS,
     PROJECTION_NOTE,
@@ -80,6 +81,13 @@ SYNTHESIZED_FROM_PROJECTIONS = "projection_meta"
 _USAGE_COLUMNS: dict[str, tuple[str, ...]] = {
     "carries": ("carries",),
     "targets": ("targets",),
+}
+
+#: Honesty note stamped on projection rows, keyed by the records' source label
+#: (sources not listed here stamp their own note via ``upsert_projections``).
+_SOURCE_NOTES: dict[str, str] = {
+    "nflverse_model": PROJECTION_NOTE,
+    "consensus": CONSENSUS_NOTE,
 }
 
 
@@ -278,13 +286,21 @@ def warm_store(
                 f"projection pull failed ({exc}); board will rebuild from stored rows"
             )
     if projections:
-        # Carry the nflverse model's honesty label into the DB; other sources
+        # Carry the source's honesty label into the DB; sources not in the map
         # can stamp their own note via upsert_projections directly.
-        note = PROJECTION_NOTE if projections[0].source == "nflverse_model" else ""
+        note = _SOURCE_NOTES.get(projections[0].source, "")
         store.upsert_projections(projections, season=season, note=note)
         result.refreshed.append("projections")
     else:
-        projections = store.projection_records(season=season)
+        # Prefer the configured source's own stored rows: after a source
+        # switch (nflverse ↔ consensus) both sources' rows coexist for the
+        # season, and an unfiltered read would put every player on the board
+        # twice. Fall back to everything only when the source has no rows.
+        source_name = getattr(projection_source, "name", None)
+        if source_name:
+            projections = store.projection_records(season=season, source=source_name)
+        if not projections:
+            projections = store.projection_records(season=season)
         if projections:
             result.warnings.append(
                 f"no fresh projections; using {len(projections)} stored rows for the board"

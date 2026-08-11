@@ -22,6 +22,10 @@ the data". It has three parts:
   cached locally so draft day needs zero network;
   :func:`~fantasy_coach.ingest.projections.make_projection_source` picks the
   configured source (free nflverse by default, FantasyPros when keyed).
+* **An opt-in consensus blend** (:mod:`~fantasy_coach.ingest.consensus`) —
+  :class:`~fantasy_coach.ingest.consensus.ConsensusProjectionSource` blends the
+  model with market-implied (ADP-calibrated) points behind the same protocol;
+  ``PROJECTION_SOURCE=consensus`` turns it on, the default stays single-source.
 
 :func:`~fantasy_coach.ingest.index.build_player_index` assembles it all into a
 :class:`~fantasy_coach.ingest.index.PlayerIndex` — the object M4 consumes.
@@ -53,6 +57,11 @@ from fantasy_coach.ingest.canonical import (
     Projections,
     dst_canonical_id,
     unresolved_canonical_id,
+)
+from fantasy_coach.ingest.consensus import (
+    CONSENSUS_NOTE,
+    ConsensusProjectionSource,
+    market_adp_from_players,
 )
 from fantasy_coach.ingest.crosswalk import (
     CrosswalkRow,
@@ -164,6 +173,10 @@ __all__ = [
     "PROJECTED_STAT_KEYS",
     "REFERENCE_SCORING",
     "PROJECTION_NOTE",
+    # consensus blend (enhancement 1 — opt-in via PROJECTION_SOURCE=consensus)
+    "ConsensusProjectionSource",
+    "market_adp_from_players",
+    "CONSENSUS_NOTE",
     # schedule (step 5 — opponent map, byes, matchup difficulty)
     "SeasonSchedule",
     "ScheduleSource",
