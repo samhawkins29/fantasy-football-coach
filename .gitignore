@@ -2,11 +2,14 @@
 .env
 .env.*
 !.env.example
-App ID yahoo.txt
+App ID*.txt
 .tokens.json
+*.tokens.json
 token.json
 *.token
 *.pem
+*secret*
+*.credentials
 
 # ---- Python ----
 __pycache__/
@@ -39,6 +42,10 @@ htmlcov/
 *.sqlite3-wal
 *.sqlite3-shm
 data/cache/
+*.tar.gz
+
+# ---- Claude Code local settings ----
+.claude/settings.local.json
 
 # ---- Editors / OS ----
 .vscode/
