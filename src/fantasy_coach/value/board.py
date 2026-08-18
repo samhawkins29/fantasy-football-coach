@@ -41,6 +41,21 @@ M4 §4.2, end to end:
    talent measures. ``injury_weight=0`` keeps ordering bit-identical to the
    pre-step-6 board (flags visible, ranking untouched) — off-by-default-safe,
    same contract as the schedule layer.
+8. **Projection distributions** (upgrade 1): projection records that carry a
+   ``floor``/``ceiling`` (:mod:`fantasy_coach.ingest.variance`) get them
+   re-centred on the league-scored points as *ratios* — so floor ≤ median ≤
+   ceiling in any scoring — plus ``floor_vorp``/``ceiling_vorp`` against the
+   same baseline. The ``risk_preference`` dial in ``[-1, 1]`` tilts the draft
+   value toward the floor (negative: "safe") or the ceiling (positive:
+   "upside"): ``+r·(ceiling_VORP − VORP)`` or ``−|r|·(VORP − floor_VORP)``.
+   ``0`` (default) is the identity — the distribution is visible, the ranking
+   untouched.
+9. **Per-week SOS** (upgrade 3): with a schedule, every projection entry also
+   gets its position-specific per-week matchup profile and the schedule-
+   adjusted season VORP ``sos_vorp`` (every week through its own opponent).
+   The ``sos_weight`` dial mixes it into the season component *before* the
+   playoff blend (:func:`~fantasy_coach.value.schedule.sos_blend`), so playoff
+   weeks stay weighted heavier on top. ``0`` (default) is the identity.
 
 Everything is parameterized by the passed-in :class:`LeagueSettings` — different
 leagues produce different boards from the same projections. Joins run on the
@@ -65,7 +80,9 @@ from fantasy_coach.value.schedule import (
     blend_value,
     playoff_weeks,
     schedule_note,
+    sos_blend,
     weekly_points,
+    weighted_sos,
 )
 from fantasy_coach.value.scoring import league_scoring
 
@@ -120,6 +137,16 @@ class BoardEntry:
     ``injury_discount`` the fraction actually shaved off the draft value
     (``None`` when nothing was shaded — including the whole board at
     ``injury_weight=0``), and ``injury_note`` the honest one-line narration.
+
+    The distribution fields (upgrade 1) are league-scored: ``floor`` /
+    ``ceiling`` bracket ``points`` (~20th/80th pct), ``floor_vorp`` /
+    ``ceiling_vorp`` bracket ``vorp``; all ``None`` when the projection source
+    carried no spread (ADP/flat entries, sources without history).
+
+    The per-week SOS fields (upgrade 3): ``week_multipliers`` is the
+    position-specific ``{week: matchup multiplier}`` profile, ``sos_vorp`` the
+    schedule-adjusted season VORP, ``sos_score`` the playoff-weighted summary
+    multiplier (1.0 = average schedule).
     """
 
     canonical_id: str
@@ -143,6 +170,18 @@ class BoardEntry:
     durability_risk: str = ""
     injury_discount: float | None = None
     injury_note: str = ""
+    floor: float | None = None
+    ceiling: float | None = None
+    floor_vorp: float | None = None
+    ceiling_vorp: float | None = None
+    sos_vorp: float | None = None
+    sos_score: float | None = None
+    week_multipliers: dict[int, float] = field(default_factory=dict)
+
+    @property
+    def has_distribution(self) -> bool:
+        """True when a floor/ceiling spread rides on this entry."""
+        return self.floor is not None and self.ceiling is not None
 
     @property
     def is_projection_based(self) -> bool:
@@ -173,6 +212,10 @@ class ValueBoard:
         injury_weight: The injury/durability discount weight the draft values
             were built with (0.0 = risk flags only, no value shading — the
             pre-step-6 ranking).
+        risk_preference: The floor↔ceiling tilt the draft values were built
+            with (0.0 = median only; <0 safe, >0 upside).
+        sos_weight: The per-week SOS mix the season component used (0.0 =
+            raw season VORP).
     """
 
     entries: list[BoardEntry] = field(default_factory=list)
@@ -183,6 +226,8 @@ class ValueBoard:
     playoff_weeks: list[int] = field(default_factory=list)
     playoff_weight: float = 0.0
     injury_weight: float = 0.0
+    risk_preference: float = 0.0
+    sos_weight: float = 0.0
 
     def top(self, n: int = 30) -> list[BoardEntry]:
         """The top ``n`` overall — the draft-board view."""
@@ -361,6 +406,8 @@ def build_value_board(
     playoff_weight: float = 0.0,
     risk: Mapping[str, PlayerRisk] | None = None,
     injury_weight: float = 0.0,
+    risk_preference: float = 0.0,
+    sos_weight: float = 0.0,
     tier_gap_factor: float = 1.5,
     tier_min_gap: float = 10.0,
     tier_fixed_gap: float | None = None,
@@ -396,6 +443,14 @@ def build_value_board(
             values. ``0.0`` (default) stamps flags but changes **no** value or
             rank — the off-by-default-safe contract; ~``0.5–1.0`` applies a
             half-to-full share of the documented discounts.
+        risk_preference: Floor↔ceiling tilt in ``[-1, 1]`` (upgrade 1).
+            ``0.0`` (default) ranks by the median; ``-1`` values every player
+            at their floor VORP, ``+1`` at their ceiling VORP; in between is a
+            linear tilt. Only entries carrying a distribution move.
+        sos_weight: Per-week SOS mix in ``[0, 1]`` (upgrade 3). ``0.0``
+            (default) keeps the raw season VORP as the season component; ``1``
+            values every week through its own matchup before the playoff
+            blend. Needs a schedule; ignored without one.
 
     Returns:
         A :class:`ValueBoard` sorted by draft value (== VORP when the playoff
@@ -413,6 +468,7 @@ def build_value_board(
 
     # 1. Rescore every projection into this league's points.
     entries: list[BoardEntry] = []
+    spread_ratios_of: list[tuple[float, float] | None] = []
     projected_gsis: set[str] = set()
     for rec in projections:
         canonical = by_gsis.get(rec.source_id)
@@ -421,6 +477,10 @@ def build_value_board(
             continue
         projected_gsis.add(rec.source_id)
         points = score_stats(rec.stats, scoring) if rec.stats else rec.points
+        if rec.floor is not None and rec.ceiling is not None and rec.points > 0:
+            spread_ratios_of.append((rec.floor / rec.points, rec.ceiling / rec.points))
+        else:
+            spread_ratios_of.append(None)
         entries.append(
             BoardEntry(
                 canonical_id=canonical.canonical_id if canonical else rec.source_id,
@@ -443,6 +503,18 @@ def build_value_board(
     baselines = replacement_baselines(points_by_pos, settings, teams)
     for e in entries:
         e.vorp = round((e.points or 0.0) - baselines.get(e.position, 0.0), 2)
+
+    # 3b. Distribution (upgrade 1): floor/ceiling re-centred on league points
+    # as ratios of the source's reference-scale spread, VORP-bracketed.
+    for e, ratios in zip(entries, spread_ratios_of):
+        if ratios is None or e.points is None:
+            continue
+        lo, hi = ratios
+        baseline = baselines.get(e.position, 0.0)
+        e.floor = round(e.points * lo, 2)
+        e.ceiling = round(e.points * hi, 2)
+        e.floor_vorp = round(e.floor - baseline, 2)
+        e.ceiling_vorp = round(e.ceiling - baseline, 2)
 
     # 5. Gap-fill from ADP / flat for players the projection model can't see.
     skipped = 0
@@ -505,9 +577,18 @@ def build_value_board(
             p_baseline = baseline * len(pweeks) / len(weekly)
             e.playoff_points = round(p_points, 2)
             e.playoff_vorp = round(p_points - p_baseline, 2)
+            # Per-week SOS (upgrade 3): every week through its own matchup.
+            e.week_multipliers = schedule.week_multipliers(
+                e.team, e.position, through=season_weeks
+            )
+            e.sos_vorp = round(sum(weekly.values()) - baseline, 2)
+            e.sos_score = weighted_sos(e.week_multipliers, pweeks)
+            if e.sos_score is not None:
+                e.sos_score = round(e.sos_score, 3)
+            season_component = sos_blend(e.vorp, e.sos_vorp, weight=sos_weight)
             e.draft_value = round(
                 blend_value(
-                    e.vorp,
+                    season_component,
                     e.playoff_vorp,
                     weight=playoff_weight,
                     n_playoff_weeks=len(pweeks),
@@ -516,6 +597,19 @@ def build_value_board(
                 2,
             )
             e.schedule_note = schedule_note(e.position, e.team, schedule, pweeks)
+
+    # 8. Risk preference (upgrade 1): tilt draft value toward floor/ceiling.
+    if risk_preference:
+        r = max(-1.0, min(1.0, risk_preference))
+        for e in entries:
+            if not e.has_distribution or e.floor_vorp is None or e.ceiling_vorp is None:
+                continue
+            tilt = (
+                r * (e.ceiling_vorp - e.vorp)
+                if r > 0
+                else r * (e.vorp - e.floor_vorp)  # r < 0 → subtracts downside
+            )
+            e.draft_value = round(e.rank_value + tilt, 2)
 
     # 7. Injury awareness (step 6): stamp flags always; shade draft value only
     # when the injury weight is on. Raw VORP and tiers are never touched — a
@@ -585,4 +679,6 @@ def build_value_board(
         playoff_weeks=pweeks,
         playoff_weight=playoff_weight if schedule is not None else 0.0,
         injury_weight=injury_weight if risk is not None else 0.0,
+        risk_preference=risk_preference,
+        sos_weight=sos_weight if schedule is not None else 0.0,
     )

@@ -29,12 +29,18 @@ you can drop `--league` everywhere.
 
 ```powershell
 .venv\Scripts\python.exe -m fantasy_coach vintage      # every slice should be recent
-.venv\Scripts\python.exe -m fantasy_coach draft --simulate --sim-slot <your slot> --playoff-weight 0.3 --injury-weight 0.5
+.venv\Scripts\python.exe -m fantasy_coach draft --simulate --sim-slot <your slot> --playoff-weight 0.3 --injury-weight 0.5 --sos-weight 0.5 --risk 0.2
 ```
 
 Offline replay of a full snake draft through the identical live loop at
-http://localhost:8787. Practice reading the board: BEST PICK NOW, tier cliffs,
-injury badges, the vintage footer.
+http://localhost:8787, against a room of profiled bots (market drafters, value
+hunters, need-fillers, reachers, RB-heavy / zero-RB / QB-early archetypes,
+handcuffers, panic drafters — they chase runs and reach like real rooms;
+`--sim-seed N` for a different room). Practice reading the board: BEST PICK
+NOW, the floor–ceiling range, the **Avail** column (P still there at your next
+pick: take now / coin flip / likely / safe), the "Plan:" line, tier cliffs,
+injury badges, the wk15–17 matchup strip, the room footer (runs + drift), the
+vintage footer.
 
 ## 3. Draft day (morning)
 
@@ -59,12 +65,19 @@ and recomputes the recommendation after every pick. Undos heal themselves.
 |---|---|
 | `--playoff-weight w` | Draft value = (1−w)·season VORP + w·playoff-week strength (wk15–17). 0 = pure season value. 0.25–0.35 is sane; VORP/tiers never move, only draft value. |
 | `--injury-weight w` | How hard documented injury/durability discounts shade draft value. 0 = badges only, ranking unchanged. 0.5 = half the documented discount. |
+| `--risk r` | Floor↔ceiling tilt in [-1,1]. 0 = median. `-0.5` leans on floors (safe team), `+0.5` on ceilings (upside — chasing a title). VORP/tiers never move. |
+| `--sos-weight s` | Per-week SOS mix in [0,1]: every week valued through its own position-specific matchup; playoff weeks weighted heavier via `--playoff-weight` on top. 0.3–0.5 is sane. |
+| `--sim-seed N` | [simulate] A different, reproducible bot room. |
 | `--status-interval s` | Seconds between live Sleeper status re-checks (default 120; don't go below ~60 — the blob is big). |
 | `--team <key>` | Your team if auto-detect can't find it. |
 | `--no-warm` | Skip the startup re-warm (use if network dies — runs fully from the store). |
 | `--port` / `--no-browser` | Board page options. |
 
-Both weights default to `PLAYOFF_EMPHASIS` / `INJURY_EMPHASIS` in `.env` (0.0).
+All four dials default to `PLAYOFF_EMPHASIS` / `INJURY_EMPHASIS` /
+`RISK_PREFERENCE` / `SOS_EMPHASIS` in `.env` (0.0 = off; the board is then
+bit-identical to the certified base). Survival probabilities need ADP (Yahoo
+`draft_analysis`, pulled by `refresh`/warm) — without it they fall back to
+board rank with a wide spread and say so (`source: rank`).
 
 Optional: `PROJECTION_SOURCE=consensus` in `.env` blends the nflverse model
 with market-implied (ADP-calibrated) points before the board is built — set it

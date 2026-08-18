@@ -48,6 +48,7 @@ from fantasy_coach.draft.recommend import (
     roster_slots,
 )
 from fantasy_coach.draft.state import DraftState, snake_team_for_pick
+from fantasy_coach.draft.survival import RoomState, estimate_survival, room_state
 from fantasy_coach.ingest.canonical import CanonicalPlayer
 from fantasy_coach.ingest.injury import InjuryReport, merge_reports
 from fantasy_coach.ingest.schedule import SeasonSchedule
@@ -138,6 +139,13 @@ class DraftLoop:
             keeps its own, much faster cadence).
         injury_weight: How hard the injury/durability discount shades draft
             values on the live board (0.0 = flags only, ranking unchanged).
+        risk_preference: Floor↔ceiling tilt on the live board (upgrade 1;
+            0.0 = median, <0 safe, >0 upside).
+        sos_weight: Per-week SOS mix on the live board (upgrade 3; 0.0 = off).
+        draft_order: Optional round-1 team order (``[team_key, …]``) for
+            predicting whose pick is whose before round 1 has been observed
+            — the simulator knows its own order; live mode learns it from
+            Yahoo's prefilled ``team_key``s or the first round.
         time_func / sleep_func: Injectable clock (tests never sleep).
     """
 
@@ -160,6 +168,9 @@ class DraftLoop:
         status_source: StatusSource | None = None,
         status_interval: float = DEFAULT_STATUS_INTERVAL,
         injury_weight: float = 0.0,
+        risk_preference: float = 0.0,
+        sos_weight: float = 0.0,
+        draft_order: Sequence[str] | None = None,
         time_func: Callable[[], float] = time.time,
         sleep_func: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -171,6 +182,9 @@ class DraftLoop:
         self._status_source = status_source
         self._status_interval = status_interval
         self._injury_weight = injury_weight
+        self._risk_preference = risk_preference
+        self._sos_weight = sos_weight
+        self._draft_order = list(draft_order or [])
         self.league_key = league_key or settings.league_key
         self.mode = mode
         self.poll_interval = poll_interval
@@ -186,6 +200,9 @@ class DraftLoop:
         self._projections = store.projection_records(season=season)
         self._players: list[CanonicalPlayer] = store.canonical_players()
         self._by_canonical = {p.canonical_id: p for p in self._players}
+        self._adp_by_canonical = {
+            p.canonical_id: (p.market.adp, p.market.adp_stddev) for p in self._players
+        }
         self._num_teams = settings.max_teams or 12
 
         # Injury picture (step 6): per-source reports seeded from the store's
@@ -205,6 +222,8 @@ class DraftLoop:
         self._slots: list = []
         self._ranked: list[RankedPlayer] = []
         self._recommendation: Recommendation | None = None
+        self._room: RoomState = RoomState()
+        self._my_upcoming: list[int] = []
         self._last_picks: list[DraftPick] = []
         self._last_sig: tuple | None = None
         self._last_success: float | None = None
@@ -242,6 +261,7 @@ class DraftLoop:
         sig = tuple(
             (p.pick, p.player_key, p.team_key) for p in picks if p.is_made
         )
+        self._last_picks = list(picks)  # before recompute: pick→team lookups
         if sig != self._last_sig or self._board is None or status_changed:
             self.state.rebuild(picks)
             if self._record_to_store:
@@ -249,7 +269,6 @@ class DraftLoop:
                 self._store.record_draft_picks(self.league_key, picks)
             self._recompute()
             self._last_sig = sig
-        self._last_picks = list(picks)
         self._last_success = self._time()
         self._last_error = None
         snapshot = self._build_snapshot()
@@ -318,16 +337,87 @@ class DraftLoop:
             playoff_weight=self._playoff_weight,
             risk=risk or None,
             injury_weight=self._injury_weight,
+            risk_preference=self._risk_preference,
+            sos_weight=self._sos_weight,
         )
         slots = assign_roster(roster_slots(self._settings), self._my_roster_infos())
         self._slots = slots
         needs = compute_needs(slots)
+
+        # Survival (upgrade 2): where my next picks fall + what the room is
+        # doing, then P(available) per player — recomputed every changed poll.
+        current_pick = self.state.pick_count + 1
+        self._my_upcoming = self._upcoming_my_picks(current_pick, count=2)
+        on_clock = bool(self._my_upcoming) and self._my_upcoming[0] == current_pick
+        my_next = self._my_upcoming[0] if self._my_upcoming else None
+        my_after = self._my_upcoming[1] if len(self._my_upcoming) > 1 else None
+        made = [
+            (
+                rp.pick.pick,
+                (self._by_canonical[rp.canonical_id].position if rp.canonical_id in self._by_canonical else ""),
+                self._adp_by_canonical.get(rp.canonical_id or "", (None, None))[0],
+            )
+            for rp in self.state.resolved
+        ]
+        self._room = room_state(
+            made, [(e.position, e.adp) for e in self._board.entries]
+        )
+        survival = estimate_survival(
+            (
+                {
+                    "canonical_id": e.canonical_id,
+                    "position": e.position,
+                    "adp": e.adp,
+                    "adp_stdev": self._adp_by_canonical.get(e.canonical_id, (None, None))[1],
+                    "overall_rank": e.overall_rank,
+                }
+                for e in self._board.entries
+            ),
+            current_pick=current_pick,
+            my_next_pick=my_next,
+            my_pick_after=my_after,
+            room=self._room,
+        )
         self._ranked = rank_available(
-            self._board, needs, starter_bye_counts=self._starter_bye_counts(slots)
+            self._board,
+            needs,
+            starter_bye_counts=self._starter_bye_counts(slots),
+            survival=survival,
+        )
+        # Picks between the one being decided and my following pick.
+        decided = my_next if my_next is not None else current_pick
+        following = my_after if on_clock else my_next
+        picks_until_next = (
+            following - decided - 1
+            if following is not None and following > decided
+            else None
         )
         self._recommendation = build_recommendation(
-            self._ranked, needs, current_pick=self.state.pick_count + 1
+            self._ranked,
+            needs,
+            current_pick=current_pick,
+            picks_until_next=picks_until_next,
+            on_the_clock=on_clock,
         )
+
+    def _upcoming_my_picks(self, current_pick: int, count: int = 2) -> list[int]:
+        """My next ``count`` pick numbers from ``current_pick`` on (inclusive).
+
+        Uses Yahoo's prefilled team keys, then the observed round-1 order,
+        then the configured ``draft_order`` (simulation). Empty when the
+        order is not knowable yet.
+        """
+        total = len(self._last_picks) if self._last_picks else None
+        if total is None:
+            return []
+        my_key = self.state.my_team_key
+        out: list[int] = []
+        for n in range(current_pick, total + 1):
+            if self._team_for_pick(n) == my_key:
+                out.append(n)
+                if len(out) >= count:
+                    break
+        return out
 
     @staticmethod
     def _starter_bye_counts(slots: Sequence) -> dict[int, int]:
@@ -432,7 +522,9 @@ class DraftLoop:
             for rp in self.state.resolved
             if rp.pick.round == 1 and rp.pick.team_key
         ]
-        return order if len(order) == self._num_teams else []
+        if len(order) == self._num_teams:
+            return order
+        return self._draft_order if len(self._draft_order) == self._num_teams else []
 
     def _team_for_pick(self, pick_number: int) -> str | None:
         """Prefer Yahoo's own team_key on the (unmade) pick; else snake-predict."""
@@ -453,11 +545,11 @@ class DraftLoop:
         on_clock_key = None if complete else self._team_for_pick(current_pick)
         my_key = self.state.my_team_key
         my_next: int | None = None
+        my_after: int | None = None
         if not complete and total is not None:
-            for n in range(current_pick, total + 1):
-                if self._team_for_pick(n) == my_key:
-                    my_next = n
-                    break
+            upcoming = self._upcoming_my_picks(current_pick, count=2)
+            my_next = upcoming[0] if upcoming else None
+            my_after = upcoming[1] if len(upcoming) > 1 else None
 
         recent = []
         for rp in self.state.resolved[-12:][::-1]:
@@ -543,12 +635,32 @@ class DraftLoop:
                     else None
                 ),
                 "my_next_pick": my_next,
+                "my_pick_after": my_after,
                 "picks_until_mine": (
                     my_next - current_pick if my_next is not None else None
                 ),
             },
+            "survival": {
+                "drift": round(self._room.drift, 1),
+                "runs": {p: round(x, 2) for p, x in self._room.run_excess.items()},
+                "recent_positions": list(self._room.recent_positions),
+            },
+            "dials": {
+                "playoff_weight": self._playoff_weight if self._schedule else 0.0,
+                "injury_weight": self._injury_weight,
+                "risk_preference": self._risk_preference,
+                "sos_weight": self._sos_weight if self._schedule else 0.0,
+            },
             "recommendation": (
-                {**rec.player.as_dict(), "reasons": rec.reasons} if rec else None
+                {
+                    **rec.player.as_dict(),
+                    "reasons": rec.reasons,
+                    "swapped_from": (
+                        rec.swapped_from.as_dict() if rec.swapped_from else None
+                    ),
+                }
+                if rec
+                else None
             ),
             "runners_up": [rp.as_dict() for rp in self._ranked[1:4]],
             "available": [rp.as_dict() for rp in self._ranked[:40]],

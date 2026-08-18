@@ -10,9 +10,13 @@ run the real code path.
 Two pieces:
 
 * :func:`script_draft` — a deterministic snake-draft script generated from the
-  store's own value board. Opponents draft by market order (ADP when stored,
-  board order otherwise) under light positional caps so they build plausible
-  rosters instead of hoarding one position; determinism keeps tests exact.
+  store's own value board. Opponents are the profiled bots of
+  :mod:`fantasy_coach.draft.bots` (upgrade 4): a mix of market drafters, value
+  hunters, need-fillers, reachers, RB-heavy / zero-RB / QB-early archetypes,
+  handcuffers and panic drafters — positional need by roster construction,
+  positional runs, reach/value tendencies, bye and handcuff logic — so the
+  scripted room flows like a real one and the survival model has something
+  honest to be judged against. A seeded RNG keeps every script reproducible.
 * :class:`SimulatedPickSource` — replays any script (generated, or a completed
   league's real ``draftresults``) N picks per poll, with :meth:`rewind` to
   exercise the undo path end to end.
@@ -23,19 +27,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from fantasy_coach.clients.models import DraftPick, LeagueSettings
+from fantasy_coach.draft.bots import BotProfile, BotRoom
 from fantasy_coach.store.store import CoachStore
 
 __all__ = ["script_draft", "SimulatedPickSource", "sim_team_names"]
-
-#: Per-team position caps for scripted opponents: nobody drafts a third QB or a
-#: second kicker in a normal room. RB/WR stay effectively uncapped (bench depth).
-_POSITION_CAPS = {"QB": 2, "TE": 2, "K": 1, "DEF": 1}
-_SUPERFLEX_QB_CAP = 3
-
-#: Where scripted teams draft their K/DEF: never before this many of their
-#: rounds remain (mirrors real rooms; also keeps flat-value entries from being
-#: "best available" nonsense mid-draft).
-_KICKER_ROUNDS_LEFT = 2
 
 
 def sim_team_names(league_key: str, num_teams: int, my_slot: int) -> dict[str, str]:
@@ -54,6 +49,8 @@ def script_draft(
     league_key: str | None = None,
     num_teams: int | None = None,
     rounds: int | None = None,
+    seed: int = 0,
+    profiles: Sequence[BotProfile] | None = None,
 ) -> list[DraftPick]:
     """Generate a full deterministic snake-draft script from the stored board.
 
@@ -61,6 +58,10 @@ def script_draft(
     yahoo id when the store has one, else the canonical id — matching how
     :class:`~fantasy_coach.draft.state.DraftState` resolves, so the sim works
     against both online- and offline-warmed stores.
+
+    ``seed`` picks the bots' reproducible noise stream (a different seed = a
+    different but equally plausible room); ``profiles`` overrides the
+    archetype mix (one per team slot, round-1 order).
     """
     league_key = league_key or settings.league_key
     num_teams = num_teams or settings.max_teams or 12
@@ -76,46 +77,21 @@ def script_draft(
         row["canonical_id"]: (row["yahoo_id"] or row["canonical_id"])
         for row in store.sql("SELECT canonical_id, yahoo_id FROM players")
     }
-    # Market order: ADP when stored, else board rank pushed after all ADP rows.
-    queue = sorted(
-        board,
-        key=lambda r: (
-            r["adp"] if r["adp"] is not None else 10_000 + r["overall_rank"],
-            r["overall_rank"],
-        ),
-    )
-
-    qb_cap = _SUPERFLEX_QB_CAP if settings.is_superflex else _POSITION_CAPS["QB"]
-    taken: set[str] = set()
-    pos_counts: dict[str, dict[str, int]] = {}
-    picks: list[DraftPick] = []
-
     team_order = [f"{league_key}.t.{slot}" for slot in range(1, num_teams + 1)]
+    room = BotRoom(
+        [dict(row) for row in board],
+        settings,
+        team_order,
+        rounds=rounds,
+        seed=seed,
+        profiles=profiles,
+    )
+    picks: list[DraftPick] = []
     for pick_no in range(1, rounds * num_teams + 1):
         rnd, idx = divmod(pick_no - 1, num_teams)
         team = team_order[idx] if rnd % 2 == 0 else team_order[num_teams - 1 - idx]
-        counts = pos_counts.setdefault(team, {})
-        rounds_left = rounds - rnd
-
-        chosen = None
-        for row in queue:
-            cid = row["canonical_id"]
-            if cid in taken:
-                continue
-            pos = row["position"]
-            cap = qb_cap if pos == "QB" else _POSITION_CAPS.get(pos)
-            if cap is not None and counts.get(pos, 0) >= cap:
-                continue
-            if pos in ("K", "DEF") and rounds_left > _KICKER_ROUNDS_LEFT:
-                continue
-            chosen = row
-            break
-        if chosen is None:  # caps exhausted the queue — take best remaining
-            chosen = next(r for r in queue if r["canonical_id"] not in taken)
-
-        cid = chosen["canonical_id"]
-        taken.add(cid)
-        counts[chosen["position"]] = counts.get(chosen["position"], 0) + 1
+        chosen = room.pick(team, pick_no, rnd + 1)
+        cid = str(chosen["canonical_id"])
         raw_id = raw_id_by_canonical.get(cid, cid)
         picks.append(
             DraftPick(

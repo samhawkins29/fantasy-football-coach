@@ -61,6 +61,11 @@ from fantasy_coach.ingest.sources import (
     ProjectionRecord,
     ProjectionSource,
 )
+from fantasy_coach.ingest.variance import (
+    SpreadModel,
+    positional_cv_priors,
+    spread_ratios,
+)
 
 __all__ = [
     "PROJECTED_STAT_KEYS",
@@ -167,10 +172,15 @@ def _num(row: Mapping[str, object], column: str) -> float:
 
 @dataclass(slots=True)
 class _SeasonLine:
-    """One player's aggregated totals for one season (internal)."""
+    """One player's aggregated totals for one season (internal).
+
+    ``weekly_points`` keeps each week's reference-scored fantasy points — the
+    raw material for the floor/ceiling spread (:mod:`fantasy_coach.ingest.variance`).
+    """
 
     games: float = 0.0
     totals: dict[str, float] = field(default_factory=dict)
+    weekly_points: list[float] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -198,6 +208,9 @@ class NflverseProjectionSource:
             (the rest comes from the player's historical games/season).
         scoring: Point map for the convenience ``points`` field.
         cache_dir: Where per-season projection JSON caches live (git-ignored).
+        spread: The floor/ceiling spread model knobs (projection
+            distributions). Every record carries ``floor``/``ceiling`` on the
+            reference scale; the board applies them as ratios to league points.
     """
 
     name: str = "nflverse_model"
@@ -210,6 +223,7 @@ class NflverseProjectionSource:
     games_regression: float = 0.5
     scoring: Mapping[str, float] = field(default_factory=lambda: dict(REFERENCE_SCORING))
     cache_dir: Path = field(default_factory=lambda: Path(".cache"))
+    spread: SpreadModel = field(default_factory=SpreadModel)
 
     @property
     def is_live(self) -> bool:
@@ -293,8 +307,12 @@ class NflverseProjectionSource:
             year = int(_num(row, "season"))
             line = lines.setdefault(gsis_id, {}).setdefault(year, _SeasonLine())
             line.games += 1.0
+            week_stats: dict[str, float] = {}
             for key, columns in PROJECTED_STAT_KEYS.items():
-                line.totals[key] = line.totals.get(key, 0.0) + sum(_num(row, c) for c in columns)
+                val = sum(_num(row, c) for c in columns)
+                week_stats[key] = val
+                line.totals[key] = line.totals.get(key, 0.0) + val
+            line.weekly_points.append(score_stats(week_stats, self.scoring))
             # Later seasons/weeks overwrite earlier ones -> most recent name/team.
             # Name/team come from the *most recent* row by (season, week) — row
             # order can't be trusted (the fetch concatenates years newest-first),
@@ -351,7 +369,22 @@ class NflverseProjectionSource:
             for pos, sums in prior_sums.items()
         }
 
-        # 4b–6. Shrink, project games, emit season stat lines.
+        # 4c. Weekly volatility priors per position (floor/ceiling input): the
+        # history window's weekly points per player.
+        weekly_by_player = {
+            gsis_id: [
+                pts
+                for year in years
+                if year in by_year
+                for pts in by_year[year].weekly_points
+            ]
+            for gsis_id, by_year in lines.items()
+        }
+        cv_priors = positional_cv_priors(
+            weekly_by_player, {gid: m["position"] for gid, m in meta.items()}
+        )
+
+        # 4b–6. Shrink, project games, emit season stat lines (+ floor/ceiling).
         records: list[ProjectionRecord] = []
         for gsis_id, rate in rates.items():
             info = meta[gsis_id]
@@ -371,12 +404,23 @@ class NflverseProjectionSource:
                 for key in PROJECTED_STAT_KEYS
             }
             stats["games"] = round(proj_games, 2)
+            points = round(score_stats(stats, self.scoring), 2)
+            est = spread_ratios(
+                weekly_by_player.get(gsis_id, []),
+                position=info["position"],
+                proj_games=proj_games,
+                shrink_weight=k / (g + k) if (g + k) > 0 else 1.0,
+                prior_cv=cv_priors.get(info["position"]),
+                model=self.spread,
+            )
             records.append(
                 ProjectionRecord(
                     source=self.name,
                     source_id=gsis_id,
                     source_id_field="gsis_id",
-                    points=round(score_stats(stats, self.scoring), 2),
+                    points=points,
+                    floor=round(points * est.floor_ratio, 2),
+                    ceiling=round(points * est.ceiling_ratio, 2),
                     position=info["position"],
                     team=info["team"],
                     name=info["name"],
@@ -405,6 +449,8 @@ class NflverseProjectionSource:
                     "source_id": r.source_id,
                     "source_id_field": r.source_id_field,
                     "points": r.points,
+                    "floor": r.floor,
+                    "ceiling": r.ceiling,
                     "position": r.position,
                     "team": r.team,
                     "name": r.name,
@@ -428,6 +474,8 @@ class NflverseProjectionSource:
                     source_id=str(r["source_id"]),
                     source_id_field=str(r.get("source_id_field", "gsis_id")),
                     points=float(r["points"]),
+                    floor=_opt_float(r.get("floor")),
+                    ceiling=_opt_float(r.get("ceiling")),
                     position=str(r.get("position", "")),
                     team=str(r.get("team", "")),
                     name=str(r.get("name", "")),
@@ -437,6 +485,11 @@ class NflverseProjectionSource:
             ]
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None  # corrupt cache -> treat as absent, recompute live
+
+
+def _opt_float(value: object) -> float | None:
+    """``float(value)`` or ``None`` for a missing/null cache cell."""
+    return None if value is None else float(value)  # type: ignore[arg-type]
 
 
 def make_projection_source(config: object, *, market: object = None) -> ProjectionSource:

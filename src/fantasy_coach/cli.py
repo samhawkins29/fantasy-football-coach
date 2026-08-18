@@ -260,6 +260,22 @@ def draft(
         "(ranking unchanged), 1 = full documented discounts. Default -1 = "
         "use INJURY_EMPHASIS from .env (0.0 = off).",
     ),
+    risk: float = typer.Option(
+        -2.0, "--risk", min=-2.0, max=1.0,
+        help="Risk preference in [-1,1]: <0 leans on floors (safe), >0 on "
+        "ceilings (upside), 0 = median. Default -2 = use RISK_PREFERENCE "
+        "from .env (0.0 = off).",
+    ),
+    sos_weight: float = typer.Option(
+        -1.0, "--sos-weight", min=-1.0, max=1.0,
+        help="Per-week strength-of-schedule mix in [0,1] (every week valued "
+        "through its own matchup; playoff weeks weighted heavier by the "
+        "playoff emphasis on top). Default -1 = use SOS_EMPHASIS from .env.",
+    ),
+    sim_seed: int = typer.Option(
+        0, "--sim-seed", help="[simulate] Seed for the bot room (a different "
+        "seed = a different but equally plausible draft)."
+    ),
     status_interval: float = typer.Option(
         120.0, "--status-interval", min=15.0,
         help="[live] Seconds between Sleeper injury-status re-checks.",
@@ -297,6 +313,8 @@ def draft(
     store = CoachStore(config.db_path)
     weight = config.playoff_emphasis if playoff_weight < 0 else playoff_weight
     inj_weight = config.injury_emphasis if injury_weight < 0 else injury_weight
+    risk_pref = config.risk_preference if risk < -1.0 else risk
+    sos_w = config.sos_emphasis if sos_weight < 0 else sos_weight
 
     league_key = league.strip() or config.yahoo_league_key
     if not league_key:
@@ -314,14 +332,16 @@ def draft(
         loop = _build_sim_loop(
             store, config, league_key, team,
             sim_slot=sim_slot, sim_speed=sim_speed, playoff_weight=weight,
-            injury_weight=inj_weight,
+            injury_weight=inj_weight, risk_preference=risk_pref,
+            sos_weight=sos_w, seed=sim_seed,
         )
         poll_interval = poll or 1.5
     else:
         loop = _build_live_loop(
             store, config, league_key, team, warm=not no_warm,
             playoff_weight=weight, injury_weight=inj_weight,
-            status_interval=status_interval,
+            status_interval=status_interval, risk_preference=risk_pref,
+            sos_weight=sos_w,
         )
         poll_interval = poll or DRAFT_POLL_INTERVAL
     loop.poll_interval = poll_interval
@@ -336,7 +356,7 @@ def draft(
         f"[dim]mode={loop.mode} · league={loop.league_key} · "
         f"team={loop.state.my_team_key or 'unset'} · poll every {poll_interval}s · "
         f"playoff emphasis {weight:g} · injury weight {inj_weight:g} · "
-        f"Ctrl+C to stop.[/]\n"
+        f"risk {risk_pref:+g} · sos {sos_w:g} · Ctrl+C to stop.[/]\n"
     )
     if not no_browser:
         try:
@@ -636,6 +656,8 @@ def refresh(
             playoff_weight=config.playoff_emphasis,
             durability=durability,
             injury_weight=config.injury_emphasis,
+            risk_preference=config.risk_preference,
+            sos_weight=config.sos_emphasis,
         )
         console.print("[dim]" + result.summary() + "[/]")
         warnings.extend(result.warnings)
@@ -661,7 +683,8 @@ def refresh(
 def _build_sim_loop(
     store, config: Config, league_key: str, team: str,
     *, sim_slot: int, sim_speed: int, playoff_weight: float,
-    injury_weight: float = 0.0,
+    injury_weight: float = 0.0, risk_preference: float = 0.0,
+    sos_weight: float = 0.0, seed: int = 0,
 ):
     """Wire the offline simulation loop: stored settings + scripted picks."""
     from fantasy_coach.draft import DraftLoop, SimulatedPickSource, script_draft, sim_team_names
@@ -678,10 +701,11 @@ def _build_sim_loop(
         raise typer.Exit(code=1)
     num_teams = settings.max_teams or 12
     team_key = team.strip() or f"{league_key}.t.{sim_slot}"
-    script = script_draft(store, settings, league_key=league_key)
+    script = script_draft(store, settings, league_key=league_key, seed=seed)
     console.print(
         f"[dim]Simulating a {num_teams}-team, {len(script) // num_teams}-round "
-        f"snake draft ({len(script)} picks); you draft from slot {sim_slot}.[/]"
+        f"snake draft ({len(script)} picks, bot seed {seed}); you draft from "
+        f"slot {sim_slot}.[/]"
     )
     return DraftLoop(
         store,
@@ -695,13 +719,17 @@ def _build_sim_loop(
         schedule=_load_schedule(config, refresh=False),
         playoff_weight=playoff_weight,
         injury_weight=injury_weight,  # flags/discounts from stored reports only
+        risk_preference=risk_preference,
+        sos_weight=sos_weight,
+        draft_order=[f"{league_key}.t.{slot}" for slot in range(1, num_teams + 1)],
     )
 
 
 def _build_live_loop(
     store, config: Config, league_key: str, team: str,
     *, warm: bool, playoff_weight: float, injury_weight: float = 0.0,
-    status_interval: float = 120.0,
+    status_interval: float = 120.0, risk_preference: float = 0.0,
+    sos_weight: float = 0.0,
 ):
     """Wire the live loop: authed Yahoo client, settings, keepers, warm pass."""
     from fantasy_coach.auth.session import get_authed_client
@@ -754,6 +782,8 @@ def _build_live_loop(
             playoff_weight=playoff_weight,
             durability=_load_durability(config),
             injury_weight=injury_weight,
+            risk_preference=risk_preference,
+            sos_weight=sos_weight,
         )
         console.print("[dim]" + result.summary() + "[/]")
 
@@ -787,6 +817,8 @@ def _build_live_loop(
         status_source=status_source,
         status_interval=status_interval,
         injury_weight=injury_weight,
+        risk_preference=risk_preference,
+        sos_weight=sos_weight,
     )
 
     # Seed keepers / pre-rostered players so they are never recommended.

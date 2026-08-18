@@ -144,6 +144,18 @@
   .need-flex { background: rgba(77,163,255,.15); color: var(--accent-2); }
   .need-depth { background: rgba(139,148,167,.14); color: var(--muted); }
   .cliff-flag { color: var(--warn); font-weight: 700; font-size: .74rem; white-space: nowrap; }
+  .surv { font-size: .64rem; padding: 2px 6px; border-radius: 5px; font-weight: 700; white-space: nowrap; letter-spacing: .04em; }
+  .surv-take { background: rgba(239,70,102,.16); color: var(--danger); }
+  .surv-coin { background: rgba(245,165,36,.16); color: var(--warn); }
+  .surv-likely { background: rgba(77,163,255,.14); color: var(--accent-2); }
+  .surv-safe { background: rgba(53,212,154,.14); color: var(--accent); }
+  .range { font-size: .7rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .range b { color: var(--text); font-weight: 600; }
+  .sos-strip { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
+  .sos-strip span { display: inline-block; min-width: 26px; text-align: center; font-size: .6rem; padding: 1px 3px; border-radius: 3px; background: rgba(139,148,167,.14); color: var(--muted); }
+  .sos-strip .soft { background: rgba(53,212,154,.18); color: var(--accent); }
+  .sos-strip .tough { background: rgba(239,70,102,.16); color: var(--danger); }
+  .swap-note { font-size: .74rem; color: var(--warn); margin-top: 4px; }
 
   /* ---------- tiers ---------- */
   .tier-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 12px; }
@@ -209,9 +221,11 @@
         <table>
           <thead><tr>
             <th>#</th><th>Player</th><th></th><th class="num">VORP</th>
-            <th class="num" id="th-dv" title="playoff-blended draft value">Draft</th>
+            <th class="num" id="th-dv" title="draft value (playoff / SOS / risk-adjusted)">Draft</th>
+            <th class="num" title="floor / ceiling projection (~20th / 80th pct)">Flr–Ceil</th>
             <th class="num">Score</th>
-            <th>Need</th><th class="num">Tier</th><th class="num">ADP</th><th></th>
+            <th>Need</th><th class="num">Tier</th><th class="num">ADP</th>
+            <th title="P(still available at your next pick)">Avail</th><th></th>
           </tr></thead>
           <tbody id="avail"></tbody>
         </table>
@@ -238,6 +252,7 @@
   <div class="foot">
     <span id="foot-counts"></span>
     <span id="foot-unmapped"></span>
+    <span id="foot-room" title="positional runs (last 8 picks vs market expectation) and how far the room runs ahead (−) / behind (+) ADP"></span>
     <span id="foot-vintage" title="last refresh per data slice (UTC) — run `refresh` pre-draft to update"></span>
     <span>Auto-refreshes every 2s — leave this tab next to the Yahoo draft room.</span>
   </div>
@@ -259,6 +274,28 @@ const injBadge = (p) => {
   return out;
 };
 const rowTitle = (p) => [p.schedule_note, p.injury_note].filter(Boolean).join(" · ");
+const survClass = (l) => l === "take now" ? "surv-take" : l === "coin flip" ? "surv-coin" : l === "likely there" ? "surv-likely" : "surv-safe";
+const survBadge = (p, onClock) => {
+  const sv = p.survival;
+  if (!sv) return "";
+  const prob = onClock ? sv.p_after : sv.p_next;
+  if (prob === null || prob === undefined) return "";
+  const lbl = onClock ? labelFor(prob) : (sv.label || labelFor(prob));
+  const title = onClock
+    ? `${Math.round(prob * 100)}% to survive to your NEXT pick` + (sv.run_excess >= 0.5 ? " · positional run in progress" : "")
+    : `${Math.round(prob * 100)}% to still be there at your pick` + (sv.run_excess >= 0.5 ? " · positional run in progress" : "");
+  return `<span class="surv ${survClass(lbl)}" title="${esc(title)}">${Math.round(prob * 100)}%</span>`;
+};
+const labelFor = (p) => p < 0.35 ? "take now" : p < 0.65 ? "coin flip" : p < 0.85 ? "likely there" : "safe to wait";
+const rangeCell = (p) => (p.floor === null || p.floor === undefined || p.ceiling === null || p.ceiling === undefined)
+  ? `<span class="range">—</span>`
+  : `<span class="range" title="floor / median / ceiling (season pts)">${fmt(p.floor, 0)}–<b>${fmt(p.ceiling, 0)}</b></span>`;
+const sosStrip = (p) => {
+  const m = p.playoff_matchups || [];
+  if (!m.length) return "";
+  return `<span class="sos-strip" title="playoff-week matchup multipliers vs ${esc(p.position)} (per-week SOS)">` +
+    m.map(w => `<span class="${w.mult >= 1.08 ? "soft" : w.mult <= 0.92 ? "tough" : ""}">wk${esc(String(w.week))} ${Number(w.mult).toFixed(2)}</span>`).join("") + `</span>`;
+};
 
 let lastFetchAt = null;     // performance.now() of last successful fetch
 let lastAge = null;         // server-reported age at fetch time
@@ -307,6 +344,11 @@ function render(s) {
     `${s.available_count ?? "—"} players still on the board · poll every ${fmt(s.poll_interval, 1)}s`;
   $("foot-unmapped").textContent = s.unmapped_count
     ? `⚠ ${s.unmapped_count} drafted id(s) unmapped (excluded by raw id)` : "";
+  const room = s.survival || {};
+  const runs = Object.entries(room.runs || {}).filter(([, x]) => x >= 0.5).map(([p]) => p);
+  $("foot-room").textContent = (room.recent_positions && room.recent_positions.length)
+    ? `room: ${runs.length ? "run on " + runs.join("/") + " · " : ""}drift ${room.drift > 0 ? "+" : ""}${fmt(room.drift, 0)} vs ADP · last ${room.recent_positions.join(" ")}`
+    : "";
   renderVintage(s);
   prevPickCount = d.pick_count ?? prevPickCount;
 }
@@ -335,23 +377,43 @@ function renderHero(s) {
   const r = s.recommendation;
   if (!r) { hero.innerHTML = `<div class="hero-empty">No recommendation yet…</div>`; return; }
   const po = s.playoff || {};
-  const blended = po.weight > 0 && r.draft_value !== null && r.draft_value !== undefined;
+  const dials = s.dials || {};
+  const onClock = !!(s.draft && s.draft.on_the_clock && s.draft.on_the_clock.is_me);
+  const adjusted = (po.weight > 0 || dials.risk_preference || dials.sos_weight) && r.draft_value !== null && r.draft_value !== undefined;
+  const blended = adjusted;
+  const dialText = [
+    po.weight > 0 ? `playoff emphasis ${fmt(po.weight, 2)}` : "",
+    (s.injury || {}).weight > 0 ? `injury weight ${fmt(s.injury.weight, 2)}` : "",
+    dials.risk_preference ? `risk ${dials.risk_preference > 0 ? "+" : ""}${fmt(dials.risk_preference, 2)} (${dials.risk_preference > 0 ? "upside" : "safe"})` : "",
+    dials.sos_weight ? `per-week SOS ${fmt(dials.sos_weight, 2)}` : "",
+  ].filter(Boolean).join(" · ");
+  const sv = r.survival || null;
+  const survLine = sv ? (() => {
+    const prob = onClock ? sv.p_after : sv.p_next;
+    if (prob === null || prob === undefined) return "";
+    const lbl = onClock ? labelFor(prob) : (sv.label || labelFor(prob));
+    return `<span><span class="big"><span class="surv ${survClass(lbl)}" style="font-size:.95rem">${Math.round(prob * 100)}%</span></span><span class="lbl">${onClock ? "lasts to your next pick" : "there at your pick"} · ${esc(lbl)}</span></span>`;
+  })() : "";
+  const swap = r.swapped_from ? `<div class="swap-note">⇄ Timing pick — value leader ${esc(r.swapped_from.name)} (${esc(r.swapped_from.position)}) should still be there next time.</div>` : "";
   const runners = (s.runners_up || []).map(p => `
     <div class="runner">${posChip(p.position)}<span>${esc(p.name)}</span>${injBadge(p)}
       <span class="score">${fmt(p.score)}</span></div>`).join("");
   hero.innerHTML = `
     <div class="hero-main">
-      <div class="hero-eyebrow">Best pick now${po.weight > 0 ? ` · playoff emphasis ${fmt(po.weight, 2)}` : ""}${(s.injury || {}).weight > 0 ? ` · injury weight ${fmt(s.injury.weight, 2)}` : ""}</div>
+      <div class="hero-eyebrow">Best pick now${dialText ? " · " + dialText : ""}</div>
       <div class="hero-name">${esc(r.name)} ${posChip(r.position)}${injBadge(r)}</div>
       <div class="hero-sub">${esc(r.team || "")}${r.bye ? ` · bye ${esc(String(r.bye))}` : ""}
-        · ${esc(r.position)}${esc(String(r.pos_rank))} · tier ${esc(String(r.tier))}</div>
+        · ${esc(r.position)}${esc(String(r.pos_rank))} · tier ${esc(String(r.tier))}${sosStrip(r)}</div>
+      ${swap}
       <div class="hero-stats">
         <span><span class="big">${fmt(r.score)}</span><span class="lbl">Need-wtd score</span></span>
         ${blended ? `<span><span class="big">${r.draft_value >= 0 ? "+" : ""}${fmt(r.draft_value)}</span><span class="lbl">Draft value</span></span>` : ""}
         <span><span class="big">${r.vorp >= 0 ? "+" : ""}${fmt(r.vorp)}</span><span class="lbl">VORP</span></span>
         ${r.playoff_vorp !== null && r.playoff_vorp !== undefined ? `<span><span class="big">${r.playoff_vorp >= 0 ? "+" : ""}${fmt(r.playoff_vorp)}</span><span class="lbl">Playoff wk${(po.weeks || []).length ? " " + po.weeks[0] + "–" + po.weeks[po.weeks.length - 1] : ""}</span></span>` : ""}
         <span><span class="big">${fmt(r.points, 0)}</span><span class="lbl">Proj pts</span></span>
+        ${r.floor !== null && r.floor !== undefined ? `<span><span class="big">${fmt(r.floor, 0)}<span class="sub" style="font-size:.9rem;font-weight:400"> – </span>${fmt(r.ceiling, 0)}</span><span class="lbl">Floor – ceiling</span></span>` : ""}
         <span><span class="big">${fmt(r.adp, 0)}</span><span class="lbl">ADP</span></span>
+        ${survLine}
       </div>
       <ul class="reasons">${r.reasons.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
     </div>
@@ -361,7 +423,10 @@ function renderHero(s) {
 function renderAvailable(s) {
   const rows = s.available || [];
   const po = s.playoff || {};
-  document.getElementById("th-dv").style.display = po.weight > 0 ? "" : "none";
+  const dials = s.dials || {};
+  const onClock = !!(s.draft && s.draft.on_the_clock && s.draft.on_the_clock.is_me);
+  const showDv = po.weight > 0 || !!dials.risk_preference || !!dials.sos_weight;
+  document.getElementById("th-dv").style.display = showDv ? "" : "none";
   const ids = new Set(rows.map(p => p.canonical_id));
   const now = performance.now();
   // players that just vanished from the board → keep visible, greyed, ~4s
@@ -379,11 +444,13 @@ function renderAvailable(s) {
       <td><span class="pname">${esc(p.name)}</span>${injBadge(p)} <span class="sub">${esc(p.team || "")}${p.bye ? " · " + esc(String(p.bye)) : ""}${p.bye_overlap > 1 ? ` <span class="cliff-flag" title="bye shared with ${esc(String(p.bye_overlap))} of your starters">⚠bye</span>` : ""}</span></td>
       <td>${posChip(p.position)}</td>
       <td class="num">${p.vorp >= 0 ? "+" : ""}${fmt(p.vorp)}</td>
-      ${po.weight > 0 ? `<td class="num">${p.draft_value >= 0 ? "+" : ""}${fmt(p.draft_value)}${p.schedule_note ? " ✦" : ""}</td>` : ""}
+      ${showDv ? `<td class="num">${p.draft_value >= 0 ? "+" : ""}${fmt(p.draft_value)}${p.schedule_note ? " ✦" : ""}</td>` : ""}
+      <td class="num">${rangeCell(p)}</td>
       <td class="num score-cell">${fmt(p.score)}</td>
       <td><span class="need-tag need-${esc(p.need)}">${esc(p.need)}</span></td>
       <td class="num">${esc(String(p.tier))}</td>
       <td class="num sub">${fmt(p.adp, 0)}</td>
+      <td>${survBadge(p, onClock)}</td>
       <td>${p.cliff ? `<span class="cliff-flag" title="last of tier">⛰ −${fmt(p.cliff_drop, 0)}</span>` : ""}</td>
     </tr>`);
   const gone = goneRows.map(g => `<tr class="gone">${g.html}</tr>`);

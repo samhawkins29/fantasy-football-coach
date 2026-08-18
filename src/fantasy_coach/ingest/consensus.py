@@ -73,6 +73,7 @@ from pathlib import Path
 from fantasy_coach.ingest.canonical import CanonicalPlayer
 from fantasy_coach.ingest.projections import NflverseProjectionSource, default_season
 from fantasy_coach.ingest.sources import ProjectionRecord, ProjectionSource
+from fantasy_coach.ingest.variance import widen_for_disagreement
 
 __all__ = [
     "CONSENSUS_NOTE",
@@ -352,12 +353,25 @@ class ConsensusProjectionSource:
                     key: round(val * scale, 2) if key != "games" else val
                     for key, val in stats.items()
                 }
+            # Distribution: the model's floor/ceiling ride along as ratios of
+            # the model point (so they re-center on the blend), then widen for
+            # source disagreement — the framework's second variance input.
+            floor = ceiling = None
+            if rec.points > 0 and rec.floor is not None and rec.ceiling is not None:
+                floor = blended * (rec.floor / rec.points)
+                ceiling = blended * (rec.ceiling / rec.points)
+                floor, ceiling = widen_for_disagreement(
+                    blended, floor, ceiling, signals.values()
+                )
+                floor, ceiling = round(floor, 2), round(ceiling, 2)
             records.append(
                 ProjectionRecord(
                     source=self.name,
                     source_id=rec.source_id,
                     source_id_field="gsis_id",
                     points=round(blended, 2),
+                    floor=floor,
+                    ceiling=ceiling,
                     position=rec.position,
                     team=rec.team,
                     name=rec.name,
@@ -387,6 +401,8 @@ class ConsensusProjectionSource:
                     "source_id": r.source_id,
                     "source_id_field": r.source_id_field,
                     "points": r.points,
+                    "floor": r.floor,
+                    "ceiling": r.ceiling,
                     "position": r.position,
                     "team": r.team,
                     "name": r.name,
@@ -411,6 +427,8 @@ class ConsensusProjectionSource:
                     source_id=str(r["source_id"]),
                     source_id_field=str(r.get("source_id_field", "gsis_id")),
                     points=float(r["points"]),
+                    floor=None if r.get("floor") is None else float(r["floor"]),
+                    ceiling=None if r.get("ceiling") is None else float(r["ceiling"]),
                     position=str(r.get("position", "")),
                     team=str(r.get("team", "")),
                     name=str(r.get("name", "")),

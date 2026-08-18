@@ -71,6 +71,14 @@ class Config:
             [0, 1]. ``0.0`` (default) shows risk flags but changes no value
             or rank — off-by-default; ``~0.5–1.0`` applies a half-to-full
             share of the documented status/durability discounts.
+        risk_preference: Floor↔ceiling tilt in [-1, 1] (projection
+            distributions). ``0.0`` (default) ranks by the median projection;
+            negative values lean toward safe floors, positive toward upside
+            ceilings (``±0.5`` is a meaningful tilt).
+        sos_emphasis: Per-week strength-of-schedule mix in [0, 1]. ``0.0``
+            (default) keeps raw season value; ``~0.5`` values every week
+            through its own matchup (playoff weeks still weighted heavier
+            by ``playoff_emphasis`` on top).
         cache_dir: Local data-cache directory (projections, schedule etc.;
             git-ignored).
         db_path: The single-file SQLite data store (git-ignored via
@@ -91,6 +99,8 @@ class Config:
     consensus_market_weight: float = 0.3
     playoff_emphasis: float = 0.0
     injury_emphasis: float = 0.0
+    risk_preference: float = 0.0
+    sos_emphasis: float = 0.0
     cache_dir: Path = field(default_factory=lambda: Path(DEFAULT_CACHE_DIR))
     db_path: Path = field(default_factory=lambda: Path(DEFAULT_DB_PATH))
 
@@ -126,18 +136,20 @@ class Config:
 
         token_path = environ.get("FANTASY_COACH_TOKEN_PATH", DEFAULT_TOKEN_PATH)
 
-        def emphasis(var: str, default: float = 0.0) -> float:
+        def emphasis(var: str, default: float = 0.0, lo: float = 0.0) -> float:
             raw = environ.get(var, "").strip()
             try:
                 value = float(raw) if raw else default
             except ValueError:
-                raise ConfigError(f"{var} must be a number in [0, 1], got {raw!r}.")
-            if not 0.0 <= value <= 1.0:
-                raise ConfigError(f"{var} must be in [0, 1], got {value}.")
+                raise ConfigError(f"{var} must be a number in [{lo:g}, 1], got {raw!r}.")
+            if not lo <= value <= 1.0:
+                raise ConfigError(f"{var} must be in [{lo:g}, 1], got {value}.")
             return value
 
         playoff_emphasis = emphasis("PLAYOFF_EMPHASIS")
         injury_emphasis = emphasis("INJURY_EMPHASIS")
+        risk_preference = emphasis("RISK_PREFERENCE", lo=-1.0)
+        sos_emphasis = emphasis("SOS_EMPHASIS")
         consensus_model_weight = emphasis("CONSENSUS_MODEL_WEIGHT", 0.7)
         consensus_market_weight = emphasis("CONSENSUS_MARKET_WEIGHT", 0.3)
 
@@ -160,6 +172,8 @@ class Config:
             consensus_market_weight=consensus_market_weight,
             playoff_emphasis=playoff_emphasis,
             injury_emphasis=injury_emphasis,
+            risk_preference=risk_preference,
+            sos_emphasis=sos_emphasis,
             cache_dir=Path(environ.get("FANTASY_COACH_CACHE_DIR", DEFAULT_CACHE_DIR)),
             db_path=Path(environ.get("FANTASY_COACH_DB_PATH", DEFAULT_DB_PATH)),
         )

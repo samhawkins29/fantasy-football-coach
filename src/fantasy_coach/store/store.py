@@ -428,10 +428,13 @@ class CoachStore:
                     """
                     INSERT INTO projections (
                       canonical_id, source, horizon, season, points,
+                      floor, ceiling,
                       position, team, name, stats, note, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (canonical_id, source, horizon, season) DO UPDATE SET
                       points = excluded.points,
+                      floor = excluded.floor,
+                      ceiling = excluded.ceiling,
                       position = excluded.position,
                       team = excluded.team,
                       name = excluded.name,
@@ -445,6 +448,8 @@ class CoachStore:
                         horizon,
                         season,
                         rec.points,
+                        rec.floor,
+                        rec.ceiling,
                         rec.position,
                         rec.team,
                         rec.name,
@@ -485,6 +490,8 @@ class CoachStore:
                 source_id=row["canonical_id"],
                 source_id_field="gsis_id",
                 points=row["points"],
+                floor=row["floor"],
+                ceiling=row["ceiling"],
                 position=row["position"],
                 team=row["team"],
                 name=row["name"],
@@ -708,8 +715,9 @@ class CoachStore:
                       league_key, canonical_id, name, position, team, points, vorp,
                       draft_value, playoff_vorp, schedule_note,
                       injury_status, durability_risk, injury_note, injury_discount,
+                      floor, ceiling, floor_vorp, ceiling_vorp, sos_vorp,
                       overall_rank, pos_rank, tier, value_source, adp, bye_week, built_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         league_key,
@@ -726,6 +734,11 @@ class CoachStore:
                         e.durability_risk,
                         e.injury_note,
                         e.injury_discount,
+                        e.floor,
+                        e.ceiling,
+                        e.floor_vorp,
+                        e.ceiling_vorp,
+                        e.sos_vorp,
                         e.overall_rank,
                         e.pos_rank,
                         e.tier,
@@ -739,8 +752,9 @@ class CoachStore:
                 """
                 INSERT INTO board_meta (
                   league_key, num_teams, baselines, scoring, skipped_no_signal,
-                  playoff_weight, playoff_weeks, injury_weight, built_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  playoff_weight, playoff_weeks, injury_weight,
+                  risk_preference, sos_weight, built_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (league_key) DO UPDATE SET
                   num_teams = excluded.num_teams,
                   baselines = excluded.baselines,
@@ -749,6 +763,8 @@ class CoachStore:
                   playoff_weight = excluded.playoff_weight,
                   playoff_weeks = excluded.playoff_weeks,
                   injury_weight = excluded.injury_weight,
+                  risk_preference = excluded.risk_preference,
+                  sos_weight = excluded.sos_weight,
                   built_at = excluded.built_at
                 """,
                 (
@@ -760,6 +776,8 @@ class CoachStore:
                     board.playoff_weight,
                     json.dumps(board.playoff_weeks),
                     board.injury_weight,
+                    board.risk_preference,
+                    board.sos_weight,
                     built_at,
                 ),
             )

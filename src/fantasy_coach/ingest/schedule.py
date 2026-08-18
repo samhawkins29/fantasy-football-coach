@@ -122,6 +122,21 @@ class SeasonSchedule:
         games = self.opponents.get(normalize_team(team) or team, {})
         return sorted(w for w in games if w <= through)
 
+    def week_multipliers(
+        self, team: str, position: str, *, through: int = _REG_SEASON_WEEKS
+    ) -> dict[int, float]:
+        """The per-week, position-specific matchup profile for one player.
+
+        ``{week: multiplier}`` over the weeks ``team`` actually plays in
+        ``1..through`` — e.g. an RB's Week-15 entry is *that* week's opponent's
+        RB-points-allowed multiplier. Bye weeks have no entry; an unknown team
+        yields ``{}`` (no weekly view — never "neutral everywhere").
+        """
+        return {
+            w: self.multiplier(position, self.opponent(team, w))
+            for w in self.game_weeks(team, through=through)
+        }
+
     def multiplier(self, position: str, defense: str | None) -> float:
         """Opponent-difficulty multiplier for ``position`` vs ``defense``.
 

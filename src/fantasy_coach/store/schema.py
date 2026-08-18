@@ -35,6 +35,10 @@ Schema map (what each table is *for*):
   (Yahoo live / Sleeper), merged at read time; every row keeps its vintage.
 * ``durability`` — per-player games-missed history + the clamped availability
   discount and categorical risk flag (a labelled model estimate).
+
+v4 widens ``projections`` with the floor/ceiling distribution and
+``value_board``/``board_meta`` with the floor/ceiling VORPs, the per-week SOS
+value, and the risk-preference / SOS dials the board was built with.
 """
 
 from __future__ import annotations
@@ -253,6 +257,18 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
           updated_at   TEXT NOT NULL
         )
         """,
+    ),
+    # -- v4: projection distributions + per-week SOS (upgrades 1 & 3) --------
+    (
+        "ALTER TABLE projections ADD COLUMN floor REAL",
+        "ALTER TABLE projections ADD COLUMN ceiling REAL",
+        "ALTER TABLE value_board ADD COLUMN floor REAL",
+        "ALTER TABLE value_board ADD COLUMN ceiling REAL",
+        "ALTER TABLE value_board ADD COLUMN floor_vorp REAL",
+        "ALTER TABLE value_board ADD COLUMN ceiling_vorp REAL",
+        "ALTER TABLE value_board ADD COLUMN sos_vorp REAL",
+        "ALTER TABLE board_meta ADD COLUMN risk_preference REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE board_meta ADD COLUMN sos_weight REAL NOT NULL DEFAULT 0",
     ),
 )
 

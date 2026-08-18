@@ -33,6 +33,18 @@ Step-5 additions, both nudges by design:
   shared starter is free — byes collide in any roster; it's the pile-up that
   costs a real week). Capped tight so it reorders near-ties, never overrides a
   clear value gap.
+
+Survival awareness (upgrade 2, framework §4.3): every ranked player carries
+their :class:`~fantasy_coach.draft.survival.Survival` estimate, and the
+recommendation runs a **two-pick lookahead** over the top candidates. Taking
+``A`` now and hoping for ``B`` at your next pick is worth
+``s_A + p_B·s_B + (1−p_B)·s_F`` (``s_F`` = what you'd otherwise get there);
+the reverse is ``s_B + p_A·s_A + (1−p_A)·s_F``. When ``B`` is close in value,
+unlikely to survive, and ``A`` very likely will, the lookahead flips the pick
+to ``B`` — "take B now, A should still be there" — and says so. Otherwise the
+value pick stands and the survival label ("take now" / "safe to wait") is
+simply narrated. Ranking order itself never changes: survival decides *timing*
+between near-equals, it doesn't rewrite value.
 """
 
 from __future__ import annotations
@@ -41,6 +53,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from fantasy_coach.clients.models import BENCH_POSITIONS, LeagueSettings
+from fantasy_coach.draft.survival import (
+    COIN_FLIP_BELOW,
+    LABEL_TAKE_NOW,
+    SAFE_ABOVE,
+    TAKE_NOW_BELOW,
+    Survival,
+)
 from fantasy_coach.ingest.names import normalize_position
 from fantasy_coach.value.board import ValueBoard, BoardEntry, _FLEX_CODES
 
@@ -58,7 +77,17 @@ __all__ = [
     "Recommendation",
     "rank_available",
     "build_recommendation",
+    "lookahead_pick",
+    "wait_for",
+    "SWAP_MIN_SCORE_RATIO",
 ]
+
+#: The two-pick lookahead only ever swaps to a candidate worth at least this
+#: share of the top score — survival decides timing between near-equals, it
+#: never talks you into a clearly worse player.
+SWAP_MIN_SCORE_RATIO = 0.80
+#: How many of the top-ranked players the lookahead considers swapping to.
+SWAP_CANDIDATES = 3
 
 #: Need tags (also the snapshot's per-player ``need`` labels).
 NEED_STARTER = "starter"
@@ -233,6 +262,8 @@ class RankedPlayer:
     cliff: bool = False
     cliff_drop: float | None = None
     bye_overlap: int = 0
+    playoff_weeks: tuple[int, ...] = ()
+    survival: Survival | None = None
 
     def as_dict(self) -> dict[str, object]:
         """The snapshot/JSON shape the web page renders."""
@@ -253,6 +284,17 @@ class RankedPlayer:
             "durability_risk": e.durability_risk,
             "injury_discount": e.injury_discount,
             "injury_note": e.injury_note,
+            "floor": e.floor,
+            "ceiling": e.ceiling,
+            "floor_vorp": e.floor_vorp,
+            "ceiling_vorp": e.ceiling_vorp,
+            "sos_vorp": e.sos_vorp,
+            "sos_score": e.sos_score,
+            "playoff_matchups": [
+                {"week": w, "mult": m}
+                for w, m in sorted(e.week_multipliers.items())
+                if w in self.playoff_weeks
+            ],
             "adp": e.adp,
             "tier": e.tier,
             "pos_rank": e.pos_rank,
@@ -264,15 +306,21 @@ class RankedPlayer:
             "cliff": self.cliff,
             "cliff_drop": self.cliff_drop,
             "bye_overlap": self.bye_overlap,
+            "survival": self.survival.as_dict() if self.survival else None,
         }
 
 
 @dataclass(slots=True)
 class Recommendation:
-    """The single BEST PICK NOW, with the reasons spelled out."""
+    """The single BEST PICK NOW, with the reasons spelled out.
+
+    ``swapped_from`` is set when the survival lookahead moved the pick off the
+    top-scored player (who is expected to still be there next time).
+    """
 
     player: RankedPlayer
     reasons: list[str] = field(default_factory=list)
+    swapped_from: RankedPlayer | None = None
 
 
 def rank_available(
@@ -280,6 +328,7 @@ def rank_available(
     needs: RosterNeeds,
     *,
     starter_bye_counts: Mapping[int, int] | None = None,
+    survival: Mapping[str, Survival] | None = None,
 ) -> list[RankedPlayer]:
     """Re-rank the available board by need-weighted score.
 
@@ -294,8 +343,12 @@ def rank_available(
     player would pile a further starter onto an already-shared bye (module
     docstring: first collision free, then ``BYE_PENALTY_STEP`` per extra
     starter, capped at ``BYE_PENALTY_MAX``).
+
+    ``survival`` (upgrade 2) attaches each player's availability estimate for
+    the page and the recommendation's lookahead; it never changes the order.
     """
     bye_counts = starter_bye_counts or {}
+    surv = survival or {}
     ranked: list[RankedPlayer] = []
     for entry in board.entries:
         need = needs.tag(entry.position)
@@ -315,6 +368,8 @@ def rank_available(
                 weight=weight,
                 need=need,
                 bye_overlap=overlap,
+                playoff_weeks=tuple(board.playoff_weeks),
+                survival=surv.get(entry.canonical_id),
             )
         )
 
@@ -333,16 +388,98 @@ def rank_available(
     return ranked
 
 
+#: Relative spread ``(ceiling − floor) / points`` above which a player reads
+#: "high-variance" (boom/bust) and below which "steady" — the middle is just
+#: narrated as the range. Sized to the variance model's typical output
+#: (established starters ≈ 0.35–0.45, thin-sample players ≈ 0.6+).
+WIDE_SPREAD = 0.55
+NARROW_SPREAD = 0.38
+
+#: The playoff-weighted season SOS score must sit this far from neutral before
+#: it is narrated on its own (the playoff note, when present, already says it).
+SOS_NOTE_DELTA = 0.05
+
+
+def distribution_note(e: BoardEntry) -> str:
+    """One line on the floor / ceiling: the range and what kind of bet it is."""
+    if e.floor is None or e.ceiling is None or not e.points:
+        return ""
+    rel = (e.ceiling - e.floor) / e.points
+    rng = f"Floor {e.floor:.0f} / median {e.points:.0f} / ceiling {e.ceiling:.0f} pts"
+    if rel >= WIDE_SPREAD:
+        return f"{rng} — high-variance, upside bet"
+    if rel <= NARROW_SPREAD:
+        return f"{rng} — steady floor"
+    return rng
+
+
+def _p_wait(rp: RankedPlayer, *, on_the_clock: bool) -> float | None:
+    """P(this player survives to the pick *after* the one being decided)."""
+    if rp.survival is None:
+        return None
+    return rp.survival.p_after if on_the_clock else rp.survival.p_next
+
+
+def lookahead_pick(
+    ranked: Sequence[RankedPlayer],
+    *,
+    picks_until_next: int | None,
+    on_the_clock: bool = True,
+) -> tuple[RankedPlayer, RankedPlayer | None]:
+    """The two-pick lookahead: who to take now, and who (if anyone) it swapped off.
+
+    ``picks_until_next`` is how many picks lie between the pick being decided
+    and your following one (drives the fallback ``s_F`` — roughly the
+    ``k``-th ranked player is what's left for you then). With no survival
+    data or no known next pick the top-scored player stands.
+    """
+    if not ranked:
+        raise ValueError("lookahead_pick needs a non-empty ranking")
+    top = ranked[0]
+    if picks_until_next is None or len(ranked) < 2:
+        return top, None
+    p_top = _p_wait(top, on_the_clock=on_the_clock)
+    if p_top is None:
+        return top, None
+    fallback_idx = min(len(ranked) - 1, max(1, picks_until_next))
+    s_f = max(0.0, ranked[fallback_idx].score)
+    s_a = top.score
+    best, best_gain = top, 0.0
+    for cand in ranked[1:SWAP_CANDIDATES + 1]:
+        p_c = _p_wait(cand, on_the_clock=on_the_clock)
+        if p_c is None or cand.score <= 0:
+            continue
+        if cand.score < SWAP_MIN_SCORE_RATIO * s_a:
+            continue
+        if not (p_c < COIN_FLIP_BELOW and p_top >= SAFE_ABOVE):
+            continue  # only flip when the survival picture is clear-cut
+        s_b = cand.score
+        ev_top_now = s_a + p_c * s_b + (1.0 - p_c) * s_f
+        ev_cand_now = s_b + p_top * s_a + (1.0 - p_top) * s_f
+        gain = ev_cand_now - ev_top_now
+        if gain > best_gain:
+            best, best_gain = cand, gain
+    return (best, top) if best is not top else (top, None)
+
+
 def build_recommendation(
     ranked: Sequence[RankedPlayer],
     needs: RosterNeeds,
     *,
     current_pick: int | None = None,
+    picks_until_next: int | None = None,
+    on_the_clock: bool = True,
 ) -> Recommendation | None:
-    """Turn the top of the need-weighted ranking into a narrated recommendation."""
+    """Turn the top of the need-weighted ranking into a narrated recommendation.
+
+    ``picks_until_next`` / ``on_the_clock`` feed the survival lookahead
+    (upgrade 2); without them the top-scored player is the pick, as before.
+    """
     if not ranked:
         return None
-    best = ranked[0]
+    best, swapped_from = lookahead_pick(
+        ranked, picks_until_next=picks_until_next, on_the_clock=on_the_clock
+    )
     e = best.entry
     blended = e.draft_value is not None and abs(e.draft_value - e.vorp) >= 0.05
     reasons = [
@@ -365,8 +502,16 @@ def build_recommendation(
             f"Last of {e.position} tier {e.tier} — {best.cliff_drop:.0f} pt "
             "cliff to the next tier"
         )
+    if e.has_distribution and e.floor is not None and e.ceiling is not None:
+        reasons.append(distribution_note(e))
     if e.schedule_note:
         reasons.append(e.schedule_note[0].upper() + e.schedule_note[1:])
+    elif e.sos_score is not None and abs(e.sos_score - 1.0) >= SOS_NOTE_DELTA:
+        kind = "favorable" if e.sos_score > 1.0 else "difficult"
+        reasons.append(
+            f"{kind.capitalize()} per-week schedule — {e.sos_score:.2f}× vs "
+            f"{e.position} (playoff weeks weighted 2×)"
+        )
     if e.injury_note:
         reasons.append(e.injury_note[0].upper() + e.injury_note[1:])
     if best.bye_overlap > BYE_STACK_FREE and e.bye_week is not None:
@@ -380,4 +525,69 @@ def build_recommendation(
         )
     if e.value_source != "projection":
         reasons.append(f"Value is {e.value_source}-derived (no stat projection)")
-    return Recommendation(player=best, reasons=reasons)
+    reasons.extend(_survival_reasons(best, swapped_from, on_the_clock=on_the_clock))
+    plan = wait_for(ranked, best, on_the_clock=on_the_clock)
+    if plan is not None:
+        p = _p_wait(plan, on_the_clock=on_the_clock) or 0.0
+        reasons.append(
+            f"Plan: {plan.entry.name} ({plan.entry.position}, score {plan.score:.1f}) "
+            f"should still be there at your next pick ({p:.0%})"
+        )
+    return Recommendation(player=best, reasons=reasons, swapped_from=swapped_from)
+
+
+def wait_for(
+    ranked: Sequence[RankedPlayer], best: RankedPlayer, *, on_the_clock: bool
+) -> RankedPlayer | None:
+    """The best runner-up who is *safe to wait on* — the "plan for next pick".
+
+    The highest-scored player (other than the pick) among the top
+    :data:`SWAP_CANDIDATES` + 1 whose survival to your following pick clears
+    ``SAFE_ABOVE``; ``None`` when nobody qualifies.
+    """
+    for rp in ranked[: SWAP_CANDIDATES + 2]:
+        if rp is best:
+            continue
+        p = _p_wait(rp, on_the_clock=on_the_clock)
+        if p is not None and p >= SAFE_ABOVE and rp.score > 0:
+            return rp
+    return None
+
+
+def _survival_reasons(
+    best: RankedPlayer, swapped_from: RankedPlayer | None, *, on_the_clock: bool
+) -> list[str]:
+    """Narrate the survival picture (and the swap, when the lookahead made one)."""
+    out: list[str] = []
+    sv = best.survival
+    if sv is None:
+        return out
+    if swapped_from is not None:
+        p_b = _p_wait(best, on_the_clock=on_the_clock) or 0.0
+        p_a = _p_wait(swapped_from, on_the_clock=on_the_clock) or 0.0
+        out.append(
+            f"Timing: take now — only {p_b:.0%} to survive to your next pick; "
+            f"{swapped_from.entry.name} ({swapped_from.entry.position}, score "
+            f"{swapped_from.score:.1f}) should still be there ({p_a:.0%})"
+        )
+        return out
+    if not on_the_clock and sv.p_next is not None:
+        if sv.label == LABEL_TAKE_NOW:
+            out.append(
+                f"Only {sv.p_next:.0%} to reach your pick — have a fallback ready"
+            )
+        else:
+            out.append(f"{sv.p_next:.0%} to still be there at your pick ({sv.label})")
+    p_after = sv.p_after
+    if p_after is not None and on_the_clock:
+        if p_after < TAKE_NOW_BELOW:
+            out.append(f"Won't last — {p_after:.0%} to survive to your next pick")
+        elif p_after < COIN_FLIP_BELOW:
+            out.append(f"Coin flip to survive to your next pick ({p_after:.0%})")
+        elif p_after >= SAFE_ABOVE:
+            out.append(
+                f"Likely there next time too ({p_after:.0%}) — still the best value now"
+            )
+    if sv.run_excess >= 0.5:
+        out.append(f"{best.entry.position} run in progress — availability shaded")
+    return out

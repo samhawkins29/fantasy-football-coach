@@ -227,6 +227,8 @@ def warm_store(
     durability: Iterable[DurabilityProfile] | None = None,
     injury_reports: Mapping[str, Mapping[str, InjuryReport]] | None = None,
     injury_weight: float = 0.0,
+    risk_preference: float = 0.0,
+    sos_weight: float = 0.0,
 ) -> WarmResult:
     """Warm the store for one league: persist every input, then rebuild+store
     the value board. The one command of the load path.
@@ -264,6 +266,9 @@ def warm_store(
         injury_weight: How hard the injury/durability discount shades the
             stored board's draft values (0.0 = flags only, ranking unchanged —
             the step-6 off-by-default contract).
+        risk_preference: Floor↔ceiling tilt for the stored board (0.0 =
+            median; see :func:`build_value_board`).
+        sos_weight: Per-week SOS mix for the stored board (0.0 = off).
 
     Returns:
         A :class:`WarmResult` with per-table counts, refreshed scopes, and
@@ -385,6 +390,8 @@ def warm_store(
             playoff_weight=playoff_weight,
             risk=risk or None,
             injury_weight=injury_weight,
+            risk_preference=risk_preference,
+            sos_weight=sos_weight,
         )
         result.board_entries = store.replace_board(league_key, board)
         result.skipped_no_signal = board.skipped_no_signal

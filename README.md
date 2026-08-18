@@ -134,7 +134,7 @@ test path — but the CLI needs the package installed.)
 | `python -m fantasy_coach logout` | Deletes the stored token file. | None |
 | `python -m fantasy_coach config` | Shows which config values are set (secrets masked) and whether OAuth is ready. | None |
 | `python -m fantasy_coach draft --league <key>` | **The live draft companion (M5).** Polls the Yahoo draft room every ~2.5s, rebuilds the drafted set (undo-safe), recomputes the available VORP board with baselines that shift as pools drain, weights it by your unfilled roster slots, and serves an auto-refreshing dark board page at `http://localhost:8787`. Auto-detects your team; seeds keepers from pre-draft rosters. | Polls `draftresults` (throttled) |
-| `python -m fantasy_coach draft --simulate` | The identical loop fed by a scripted snake draft generated from the stored board — the full offline dress rehearsal (page, roster fill, recommendations). `--sim-slot N` picks your slot, `--sim-speed K` reveals K picks per poll. | None |
+| `python -m fantasy_coach draft --simulate` | The identical loop fed by a scripted snake draft generated from the stored board — the full offline dress rehearsal (page, roster fill, recommendations, survival labels). Opponents are profiled bots (market / value-hunter / need-filler / reacher / RB-heavy / zero-RB / QB-early / handcuffer / TE-early / panic drafter) with positional need, run-chasing, reach noise, bye and handcuff logic. `--sim-slot N` picks your slot, `--sim-speed K` reveals K picks per poll, `--sim-seed S` a different (reproducible) room. | None |
 | `python -m fantasy_coach refresh` | **The pre-draft freshness pass (step 6).** Re-pulls everything to its most up-to-date state: nflverse projections/schedule/durability caches, current injury statuses from Sleeper (free, no key) and — when authed — Yahoo statuses + ADP; rebuilds the board; prints before/after data vintage. Every step degrades to a warning. `--skip-yahoo` works without auth. | nflverse + Sleeper (+ Yahoo unless skipped) |
 | `python -m fantasy_coach vintage` | Shows how fresh every stored data slice is (per-source refresh timestamps), and which sources are truly live vs periodic. | None |
 
@@ -159,6 +159,8 @@ Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored):
 | `CONSENSUS_MARKET_WEIGHT` | No | Consensus blend weight for the market/ADP-implied signal, in [0,1]. Default `0.3`. |
 | `PLAYOFF_EMPHASIS` | No | Playoff blend weight `w` in [0,1] (step 5): draft value = `(1−w)·season VORP + w·playoff strength`. Default `0` (pure season value). |
 | `INJURY_EMPHASIS` | No | Injury/durability discount weight in [0,1] (step 6). Default `0`: risk flags are shown but values/ranks never move; `0.5–1.0` shades Out/IR/Questionable players and chronic games-missers down by the documented, clamped discounts. |
+| `RISK_PREFERENCE` | No | Floor↔ceiling tilt in [-1,1]. Every projection carries a floor/ceiling (~20th/80th pct, from historical week-to-week variance + role uncertainty); `0` (default) ranks by the median, `<0` leans on floors (safe), `>0` on ceilings (upside). Only draft value moves. |
+| `SOS_EMPHASIS` | No | Per-week strength-of-schedule mix in [0,1]. `0` (default) keeps raw season value; `0.5` values half the season component through each week's own position-specific matchup. Playoff weeks stay weighted heavier by `PLAYOFF_EMPHASIS` on top. |
 | `FANTASY_COACH_CACHE_DIR` | No | Local data-cache directory (season projection caches). Default `.cache` (git-ignored). |
 
 ### Season projections (free, nflverse-based)
@@ -179,6 +181,55 @@ Rookies and K/DEF are not covered (no nflverse history / no kicking stat lines)
 online — projections are cached per season under `.cache/`, and every later
 `project()` is served from disk with zero network. Draft day never depends on a
 live nflverse fetch.
+
+### Projection distributions: floor / median / ceiling
+
+Every nflverse projection now carries a **floor and ceiling** (~20th / 80th
+percentile) alongside the median (`ingest/variance.py`). The spread comes from
+the player's own **week-to-week fantasy scoring variance** in the history
+window (coefficient of variation, shrunk toward a positional prior computed
+from qualified players), aggregated to a season total (`cv/√games`), combined
+in quadrature with a **role/sample uncertainty** term that grows with how much
+of the point projection came from the positional prior (thin history = wide
+range). The consensus source carries the spread through and **widens it for
+source disagreement** (model vs market-implied). Floors/ceilings ride as
+*ratios* so they survive league rescoring; the board brackets both points and
+VORP (`floor_vorp` / `ceiling_vorp`), the page shows the range, the
+recommendation narrates it ("Floor 189 / median 250 / ceiling 310 — high-
+variance, upside bet"). `RISK_PREFERENCE` / `--risk` tilts draft value toward
+floor or ceiling; `0` is the identity. Relative uncertainty is the claim, not
+calibrated percentiles — the calibration loop is what checks that later.
+
+### Draft survival: "will he last to my next pick?"
+
+`draft/survival.py` estimates, for every available player, the probability
+they are still there at your **next** pick and the one **after** — ADP as a
+normal distribution (σ grows with ADP; a source stdev wins when present),
+conditional on the player still being available now (so a faller is not
+written off), shifted by the **room's drift** (median pick − ADP over the last
+24 picks) and by **positional runs** (last 8 picks vs the market's expected
+positional mix — a run on RB pulls every RB's effective ADP earlier). Players
+with no ADP fall back to their rank on the available board with a wide σ. The
+loop recomputes it every changed poll. Every player carries a label
+(**take now** / coin flip / likely there / **safe to wait**), and the
+recommendation runs a **two-pick lookahead**: when a near-equal is unlikely to
+survive and the value leader very likely will, it flips to "take X now — Y
+should still be there" (and always adds a "Plan: … should still be there at
+your next pick" line when a safe runner-up exists). Ranking itself never
+changes — survival decides *timing* between near-equals.
+
+### Per-week strength of schedule
+
+`SeasonSchedule.week_multipliers` exposes each player's position-specific
+per-week matchup profile (an RB's Week-15 entry is *that* defense's RB points
+allowed multiplier). The board values every week through its own opponent
+(`sos_vorp`), summarises it as a playoff-weighted `sos_score` (playoff weeks
+count 2×), and mixes it into the season component with `SOS_EMPHASIS` /
+`--sos-weight` *before* the playoff blend — so the two dials compose: SOS
+shades every week, the playoff emphasis re-weights weeks 15–17 on top. The
+schedule note now names an extreme playoff-week matchup ("tough wk16 matchup
+vs SF (0.78× vs RB)"), and the page shows the wk15–17 strip. `0` is the
+identity.
 
 ### Consensus projections (opt-in blend — enhancement 1)
 

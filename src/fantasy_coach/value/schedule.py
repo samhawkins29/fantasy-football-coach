@@ -27,6 +27,21 @@ The model, in full (no hidden steps — every output is a **model estimate**):
    ``w`` reads as a true dial: ``w=0`` is exactly the season board (existing
    behavior preserved), ``w=1`` ranks purely by playoff-week strength.
 
+5. **Per-week SOS value** (upgrade 3): the same weekly split summed over the
+   *whole* fantasy season is the schedule-adjusted season total —
+   ``sos_points = Σ_w weekly_w`` — and ``sos_VORP = sos_points − baseline``.
+   Where the playoff VORP looks only at the playoff weeks, this looks at every
+   week through its own opponent (position-specific: an RB's Week-9 matchup
+   is that week's defense's RB points allowed). The board mixes it into the
+   season component with a ``sos_weight`` dial —
+   ``season = (1−s)·VORP + s·sos_VORP`` — before the playoff blend, so the
+   playoff weeks are still weighted more heavily on top (the two dials
+   compose: SOS shades every week, the playoff emphasis re-weights 15–17).
+   ``s=0`` keeps the pre-upgrade board exactly.
+6. **Weighted SOS score**: :func:`weighted_sos` folds a player's per-week
+   profile into one number with playoff weeks counted heavier — the display /
+   narration summary of the schedule (1.0 = league-average matchups).
+
 The in-season optimizer (later step) reuses :func:`weekly_points` directly —
 rest-of-season value is the same split summed from the current week instead of
 week 1, and start/sit is a single week of it.
@@ -42,11 +57,25 @@ from fantasy_coach.ingest.schedule import SeasonSchedule
 __all__ = [
     "DEFAULT_PLAYOFF_START_WEEK",
     "DEFAULT_PLAYOFF_ROUNDS",
+    "PLAYOFF_WEEK_WEIGHT",
     "playoff_weeks",
     "weekly_points",
     "blend_value",
+    "sos_blend",
+    "weighted_sos",
+    "extreme_playoff_week",
     "schedule_note",
 ]
+
+#: How much heavier a playoff week counts than a regular week in the
+#: :func:`weighted_sos` summary score (2× — the championship weeks are the
+#: ones you can't afford to lose to a bad matchup).
+PLAYOFF_WEEK_WEIGHT = 2.0
+
+#: A single playoff week whose multiplier sits this far from neutral gets
+#: called out by name in the note (a 0.80× championship-week matchup is worth
+#: knowing even when the three-week average is unremarkable).
+_EXTREME_WEEK_DELTA = 0.15
 
 #: Yahoo-default fantasy playoff shape, used only when the league's settings
 #: don't carry the real values (offline-built settings): weeks 15–17.
@@ -125,6 +154,56 @@ def blend_value(
     return (1.0 - weight) * season_vorp + weight * annualized
 
 
+def sos_blend(season_vorp: float, sos_vorp: float, *, weight: float) -> float:
+    """``(1−s)·season_VORP + s·per-week-SOS VORP`` — the season component.
+
+    Identity at ``weight=0`` (the pre-upgrade board); at ``weight=1`` every
+    week of the season is valued through its own matchup.
+    """
+    return (1.0 - weight) * season_vorp + weight * sos_vorp
+
+
+def weighted_sos(
+    week_multipliers: dict[int, float],
+    playoff_weeks: list[int],
+    *,
+    playoff_weight: float = PLAYOFF_WEEK_WEIGHT,
+) -> float | None:
+    """One-number schedule summary: the per-week multipliers averaged with
+    playoff weeks counted ``playoff_weight``× heavier. ``None`` with no weeks.
+    """
+    if not week_multipliers:
+        return None
+    pw = set(playoff_weeks)
+    total = 0.0
+    weight_sum = 0.0
+    for week, mult in week_multipliers.items():
+        w = playoff_weight if week in pw else 1.0
+        total += w * mult
+        weight_sum += w
+    return total / weight_sum if weight_sum else None
+
+
+def extreme_playoff_week(
+    position: str, team: str, schedule: SeasonSchedule, weeks: list[int]
+) -> tuple[int, str, float] | None:
+    """The playoff week furthest from neutral, if it clears the call-out bar.
+
+    Returns ``(week, opponent, multiplier)`` or ``None``.
+    """
+    best: tuple[int, str, float] | None = None
+    for w in weeks:
+        opp = schedule.opponent(team, w)
+        if opp is None:
+            continue
+        mult = schedule.multiplier(position, opp)
+        if abs(mult - 1.0) < _EXTREME_WEEK_DELTA:
+            continue
+        if best is None or abs(mult - 1.0) > abs(best[2] - 1.0):
+            best = (w, opp, mult)
+    return best
+
+
 def schedule_note(
     position: str,
     team: str,
@@ -150,8 +229,17 @@ def schedule_note(
     if not mults:
         return ""
     avg = sum(mults) / len(mults)
+    extreme = extreme_playoff_week(position, team, schedule, weeks)
+    detail = ""
+    if extreme is not None:
+        week, opp, mult = extreme
+        detail = f"; wk{week} vs {opp} {mult:.2f}×"
     if avg >= _SOFT_THRESHOLD:
-        return f"soft playoff schedule ({span}: {avg:.2f}× vs {position})"
+        return f"soft playoff schedule ({span}: {avg:.2f}× vs {position}{detail})"
     if avg <= _TOUGH_THRESHOLD:
-        return f"tough playoff schedule ({span}: {avg:.2f}× vs {position})"
+        return f"tough playoff schedule ({span}: {avg:.2f}× vs {position}{detail})"
+    if extreme is not None:
+        week, opp, mult = extreme
+        kind = "soft" if mult > 1.0 else "tough"
+        return f"{kind} wk{week} matchup vs {opp} ({mult:.2f}× vs {position})"
     return ""
