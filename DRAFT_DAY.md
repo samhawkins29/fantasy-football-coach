@@ -25,7 +25,13 @@ it), plus projections / schedule / durability / Sleeper + Yahoo statuses / ADP,
 and builds the value board. Set `YAHOO_LEAGUE_KEY=<game>.l.<id>` in `.env` so
 you can drop `--league` everywhere.
 
-## 1b. Your league's rules (once; again by Sep 1 with keepers)
+## 1b. Your league's rules (once) and keepers (by Sep 1)
+
+Keepers can go into `data/league.json` (`"keepers": {"3": [{"player": "Puka
+Nacua", "last_round": 9}]}` — cost round derived: 9 → 6; `"undrafted"` → 15)
+**or** be entered on the draft page's *Keepers* panel once `draft --manual`
+is up (team → player → "drafted last year in round …" → Add). Both land in
+the store; the page shows every team's keepers with their cost round.
 
 ```powershell
 # data/league.json holds the league exactly: 10 teams, full PPR, QB/2RB/2WR/2FLEX/DEF/D(IDP)/8BN,
@@ -76,7 +82,10 @@ is on the clock; change the picker only for a traded pick. Mis-entry: **↶
 Undo** (or Ctrl+Z), or hover the pick in *Recent picks* and click ✕. Every
 pick is saved to the store — if the page or the process dies, run the same
 command again and it resumes where you were (`--reset-draft` starts over).
-The hero always shows "your pick is in N — likely gone by then".
+The hero always shows "your pick is in N — likely gone by then". The
+*League* panel below the board is the whole room: every team's keepers +
+picks and what they still need — that's what the survival numbers read.
+`PICK_MODEL.md` documents the exact formula behind BEST PICK NOW.
 
 **With Yahoo API access (if ever approved):**
 

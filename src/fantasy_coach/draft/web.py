@@ -24,6 +24,10 @@ is attached — the offline live-draft path):
   ``POST /api/reset``. Each returns ``{ok, message, state}`` with the
   recomputed snapshot so the page never waits for the next poll.
 * ``GET /api/teams`` — round-1 order with names (the team picker).
+* ``GET /api/keepers`` — every team's keepers + the rules; ``POST
+  /api/keepers/add`` ``{"team_key", "player", "last_round"|null,
+  "cost_round"?}`` and ``POST /api/keepers/remove`` ``{"team_key",
+  "player"}`` — persisted in the store, applied to the pick list at once.
 
 The server binds ``127.0.0.1`` — this is a private cockpit, not a site.
 """
@@ -100,6 +104,8 @@ class CompanionServer:
                     self._json(200, {"results": manual.search(q, position=pos)})
                 elif path == "/api/teams" and manual is not None:
                     self._json(200, {"teams": manual.teams()})
+                elif path == "/api/keepers" and manual is not None:
+                    self._json(200, manual.keeper_view())
                 else:
                     self._send(404, "text/plain", b"not found")
 
@@ -129,6 +135,16 @@ class CompanionServer:
                         out = manual.undo()
                     elif path == "/api/reset":
                         out = manual.reset()
+                    elif path == "/api/keepers/add":
+                        lr = payload.get("last_round")
+                        cr = payload.get("cost_round")
+                        out = manual.add_keeper(
+                            str(payload["team_key"]), str(payload["player"]),
+                            last_round=None if lr in (None, "", "undrafted") else int(lr),
+                            cost_round=None if cr in (None, "") else int(cr),
+                        )
+                    elif path == "/api/keepers/remove":
+                        out = manual.remove_keeper(str(payload["team_key"]), str(payload["player"]))
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                         return

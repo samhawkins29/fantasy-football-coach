@@ -207,7 +207,15 @@ priors and floor/ceiling spreads; nflverse sub-positions collapse to Yahoo's
 `DL`/`LB`/`DB`, and the `D` slot is a flex over the three. Bots draft IDPs in
 the back stretch (one or two per team).
 
-**Keepers.** `keeper_rules` + `keepers` (`{slot: [{player, round}]}`) drive:
+**Keepers — full flow.** Enter every team's kept players either in the spec
+(`{slot: [{player, last_round|"undrafted"}]}` — the rules derive the cost
+round; `round` overrides) or live on the draft page's *Keepers* panel (team,
+player search, "drafted last year in round …" → the cost round is derived and
+shown; ✕ removes). They are stored in the `keepers` table (`setup-league`
+imports the spec's; the page edits win) and applied at once. Rule: cost =
+last year's round − 3, rounds 1–3 un-keepable, undrafted → Rd 15 then
+14/16/17, max 4, no two keepers on one round, a player kept by one team can't
+be kept by another. Effects:
 kept players leave the pool from pick 1, each one consumes the keeping team's
 pick in its cost round (scripted into the simulated draft exactly as Yahoo
 pre-populates them; live mode seeds keepers from the pre-draft rosters),
@@ -238,6 +246,10 @@ variance, upside bet"). `RISK_PREFERENCE` / `--risk` tilts draft value toward
 floor or ceiling; `0` is the identity. Relative uncertainty is the claim, not
 calibrated percentiles — the calibration loop is what checks that later.
 
+See **[PICK_MODEL.md](PICK_MODEL.md)** for the complete pick formula (VORP →
+distribution → per-week SOS + playoff weighting → risk tilt → injury → need
+weight → survival lookahead), the audit target.
+
 ### Manual draft entry (the live draft without Yahoo)
 
 `draft --manual` runs the identical `DraftLoop` off a hand-fed pick list
@@ -251,6 +263,11 @@ and the page's entry bar (`/` focuses it) does search-as-you-type over the
 whole player table with available players first and taken ones flagged with
 their pick number. The snake position is tracked from pick 1, so the hero
 shows "your pick is in N — likely gone by then: …" from the survival model.
+The **League** panel shows every team's roster (keepers marked K) and open
+starting needs plus each team's next live pick; the survival model reads
+those rosters (a team whose RB slots are kept-full makes RBs safer to your
+next pick — `need_scale`), and a ⚡ run alert appears on the hero when the
+last 8 picks over-drew a position.
 Yahoo auto-sync is a strictly optional overlay (`--yahoo-sync`) that fills
 open slots from `draftresults`; failures are logged and ignored.
 

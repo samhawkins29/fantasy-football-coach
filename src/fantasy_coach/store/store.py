@@ -813,6 +813,59 @@ class CoachStore:
             "SELECT * FROM board_meta WHERE league_key = ?", (league_key,)
         ).fetchone()
 
+    # -- keepers (keeper leagues) ---------------------------------------------
+
+    def upsert_keeper(
+        self,
+        league_key: str,
+        *,
+        team_key: str,
+        canonical_id: str,
+        cost_round: int,
+        name: str = "",
+        position: str = "",
+        last_round: int | None = None,
+        source: str = "manual",
+    ) -> None:
+        """Insert/replace one kept player for a team."""
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO keepers (
+                  league_key, team_key, canonical_id, name, position,
+                  last_round, cost_round, source, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (league_key, team_key, canonical_id) DO UPDATE SET
+                  name = excluded.name, position = excluded.position,
+                  last_round = excluded.last_round, cost_round = excluded.cost_round,
+                  source = excluded.source, updated_at = excluded.updated_at
+                """,
+                (league_key, team_key, canonical_id, name, position, last_round,
+                 cost_round, source, self._now()),
+            )
+        self.stamp_vintage(f"keepers:{league_key}")
+
+    def delete_keeper(self, league_key: str, *, team_key: str, canonical_id: str) -> int:
+        """Remove one keeper; returns rows deleted (a player kept by another team stays)."""
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM keepers WHERE league_key = ? AND team_key = ? AND canonical_id = ?",
+                (league_key, team_key, canonical_id),
+            )
+        return cur.rowcount
+
+    def clear_keepers(self, league_key: str) -> int:
+        with self.conn:
+            cur = self.conn.execute("DELETE FROM keepers WHERE league_key = ?", (league_key,))
+        return cur.rowcount
+
+    def keepers(self, league_key: str) -> list[sqlite3.Row]:
+        """Every keeper row for a league, by team then cost round."""
+        return self.conn.execute(
+            "SELECT * FROM keepers WHERE league_key = ? ORDER BY team_key, cost_round",
+            (league_key,),
+        ).fetchall()
+
     # -- draft picks (M5 writes; the available-board query excludes) -----------
 
     def record_draft_picks(self, league_key: str, picks: Iterable[DraftPick]) -> int:

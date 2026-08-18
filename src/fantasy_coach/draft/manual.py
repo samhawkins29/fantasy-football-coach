@@ -40,11 +40,13 @@ from dataclasses import dataclass, field
 
 from fantasy_coach.clients.models import DraftPick
 from fantasy_coach.ingest.names import clean_name
+from fantasy_coach.league import KeeperConflict, KeeperRules, assign_keeper_rounds
 
 __all__ = [
     "snake_team_keys",
     "ManualPickSource",
     "PlayerFinder",
+    "KeeperBook",
     "ManualDraft",
 ]
 
@@ -192,6 +194,36 @@ class ManualPickSource:
                 p.player_key = ""
         self._history = []
 
+    def apply_keepers(self, keepers: Iterable[tuple[str, int, str]]) -> list[str]:
+        """Replace the pre-made keeper picks with ``(team_key, round, canonical_id)``.
+
+        Previous keeper picks are blanked, new ones pre-made. A keeper whose
+        cost-round slot is already a *live* pick is reported (not applied)
+        — clear that pick first. Returns the warnings.
+        """
+        for pick_no in sorted(self._keeper_picks):
+            p = self._picks[pick_no - 1]
+            p.player_key = ""
+        self._keeper_picks.clear()
+        warnings: list[str] = []
+        for team_key, rnd, cid in keepers:
+            pick_no = self.pick_number_for(team_key, int(rnd))
+            if pick_no is None:
+                warnings.append(f"{team_key} has no round {rnd} in a {self.rounds}-round draft")
+                continue
+            if self._picks[pick_no - 1].is_made:
+                warnings.append(f"pick {pick_no} ({team_key} round {rnd}) already holds a live pick")
+                continue
+            prior = self.picks_by_player().get(str(cid))
+            if prior is not None:
+                self.unmark(prior)  # was marked live by hand — the keeper entry wins
+            self._set(pick_no, str(cid), keeper=True)
+        return warnings
+
+    @property
+    def keeper_pick_numbers(self) -> set[int]:
+        return set(self._keeper_picks)
+
     def restore(self, picks: Iterable[DraftPick]) -> int:
         """Reload made picks (from the store after a restart). Returns count."""
         n = 0
@@ -317,6 +349,14 @@ class PlayerFinder:
                 return 4
         return None
 
+    def lookup(self, raw_or_canonical_id: str) -> dict[str, object] | None:
+        """One player by raw id or canonical id (``None`` if unknown)."""
+        for item in self._items:
+            if item.raw_id == raw_or_canonical_id or item.canonical_id == raw_or_canonical_id:
+                return {"canonical_id": item.canonical_id, "raw_id": item.raw_id, "name": item.name,
+                        "position": item.position, "team": item.team}
+        return None
+
     def search(
         self,
         query: str,
@@ -359,6 +399,104 @@ class PlayerFinder:
 
 
 # --------------------------------------------------------------------------- #
+# Keeper entry (store-backed)
+# --------------------------------------------------------------------------- #
+
+
+class KeeperBook:
+    """Every team's keepers, persisted in the store's ``keepers`` table.
+
+    Entry is by *last year's round* (or undrafted); the league's
+    :class:`~fantasy_coach.league.KeeperRules` derive the cost round and
+    spread multiple undrafted keepers (15 → 14 → 16 → 17). Each change
+    re-derives the whole team's rounds so the set is always consistent, and
+    :meth:`triples` hands the result to the pick source / simulator.
+    """
+
+    def __init__(self, store, league_key: str, rules: KeeperRules | None, *, rounds: int) -> None:
+        self._store = store
+        self._league_key = league_key
+        self.rules = rules or KeeperRules()
+        self._rounds = rounds
+
+    def rows(self) -> list[dict[str, object]]:
+        return [dict(r) for r in self._store.keepers(self._league_key)]
+
+    def by_team(self) -> dict[str, list[dict[str, object]]]:
+        out: dict[str, list[dict[str, object]]] = {}
+        for r in self.rows():
+            out.setdefault(str(r["team_key"]), []).append(r)
+        return out
+
+    def triples(self) -> list[tuple[str, int, str]]:
+        return [(str(r["team_key"]), int(r["cost_round"]), str(r["canonical_id"])) for r in self.rows()]
+
+    def add(
+        self,
+        team_key: str,
+        canonical_id: str,
+        *,
+        name: str = "",
+        position: str = "",
+        last_round: int | None = None,
+        cost_round: int | None = None,
+    ) -> list[dict[str, object]]:
+        """Add (or update) a keeper; re-derives the team's cost rounds.
+
+        ``cost_round`` overrides the rule (a commissioner exception); by
+        default the rule decides from ``last_round``. Raises
+        :class:`KeeperConflict` (rules) or ``ValueError`` (a player already
+        kept by another team).
+        """
+        for r in self.rows():
+            if str(r["canonical_id"]) == canonical_id and str(r["team_key"]) != team_key:
+                raise ValueError(f"{r['name'] or canonical_id} is already kept by {r['team_key']}")
+        team_rows = [r for r in self.by_team().get(team_key, []) if str(r["canonical_id"]) != canonical_id]
+        entries = [(str(r["canonical_id"]), r["last_round"]) for r in team_rows] + [(canonical_id, last_round)]
+        if len(entries) > self.rules.max_keepers:
+            raise KeeperConflict(f"{team_key} would keep {len(entries)} — the rules allow {self.rules.max_keepers}")
+        # Manually-fixed rounds keep their round; the rest are re-derived.
+        fixed = {str(r["canonical_id"]): int(r["cost_round"]) for r in team_rows if r["source"] == "override"}
+        if cost_round is not None:
+            fixed[canonical_id] = int(cost_round)
+        derived = dict(assign_keeper_rounds([e for e in entries if e[0] not in fixed], self.rules, rounds=self._rounds))
+        rounds_used = list(fixed.values()) + list(derived.values())
+        if len(set(rounds_used)) != len(rounds_used):
+            raise KeeperConflict("two keepers on the team would cost the same round")
+        for cid, last in entries:
+            r_cost = fixed.get(cid, derived.get(cid))
+            row_name, row_pos = name, position
+            src = "override" if cid in fixed else "rule"
+            for r in team_rows:
+                if str(r["canonical_id"]) == cid:
+                    row_name, row_pos = str(r["name"]), str(r["position"])
+                    break
+            self._store.upsert_keeper(
+                self._league_key, team_key=team_key, canonical_id=cid, cost_round=int(r_cost),
+                name=row_name, position=row_pos, last_round=last, source=src,
+            )
+        return self.by_team().get(team_key, [])
+
+    def remove(self, team_key: str, canonical_id: str) -> int:
+        n = self._store.delete_keeper(self._league_key, team_key=team_key, canonical_id=canonical_id)
+        # Re-derive the survivors' rounds (an undrafted fill order may shift).
+        rest = self.by_team().get(team_key, [])
+        if rest and n:
+            entries = [(str(r["canonical_id"]), r["last_round"]) for r in rest if r["source"] != "override"]
+            for cid, rnd in assign_keeper_rounds(entries, self.rules, rounds=self._rounds):
+                row = next(r for r in rest if str(r["canonical_id"]) == cid)
+                self._store.upsert_keeper(
+                    self._league_key, team_key=team_key, canonical_id=cid, cost_round=rnd,
+                    name=str(row["name"]), position=str(row["position"]), last_round=row["last_round"],
+                    source="rule",
+                )
+        return n
+
+    def clear(self) -> int:
+        return self._store.clear_keepers(self._league_key)
+
+
+# --------------------------------------------------------------------------- #
 # The controller the web layer drives
 # --------------------------------------------------------------------------- #
 
@@ -376,6 +514,68 @@ class ManualDraft:
     loop: object  # DraftLoop (typed loosely to avoid an import cycle)
     finder: PlayerFinder
     team_names: dict[str, str] = field(default_factory=dict)
+    keepers: KeeperBook | None = None
+
+    # -- keepers -----------------------------------------------------------------
+
+    def keeper_view(self) -> dict[str, object]:
+        if self.keepers is None:
+            return {"enabled": False, "teams": []}
+        by_team = self.keepers.by_team()
+        return {
+            "enabled": True,
+            "rules": {
+                "max_keepers": self.keepers.rules.max_keepers,
+                "min_draft_round_to_keep": self.keepers.rules.min_draft_round_to_keep,
+                "cost_rounds_earlier": self.keepers.rules.cost_rounds_earlier,
+                "undrafted_cost_round": self.keepers.rules.undrafted_cost_round,
+            },
+            "teams": [
+                {
+                    "team_key": k,
+                    "name": self.team_names.get(k, k.rsplit(".", 1)[-1]),
+                    "keepers": [
+                        {"canonical_id": r["canonical_id"], "name": r["name"], "position": r["position"],
+                         "last_round": r["last_round"], "cost_round": r["cost_round"], "source": r["source"]}
+                        for r in by_team.get(k, [])
+                    ],
+                }
+                for k in self.source.order
+            ],
+        }
+
+    def add_keeper(self, team_key: str, raw_id: str, *, last_round: int | None, cost_round: int | None = None) -> dict[str, object]:
+        if self.keepers is None:
+            raise ValueError("this league has no keeper rules")
+        item = self.finder.lookup(raw_id)
+        if item is None:
+            raise ValueError(f"unknown player {raw_id!r}")
+        self.keepers.add(
+            team_key, item["canonical_id"], name=item["name"], position=item["position"],
+            last_round=last_round, cost_round=cost_round,
+        )
+        return self._apply_keepers(f"{item['name']} kept by {self.team_names.get(team_key, team_key)}")
+
+    def remove_keeper(self, team_key: str, raw_id: str) -> dict[str, object]:
+        if self.keepers is None:
+            raise ValueError("this league has no keeper rules")
+        item = self.finder.lookup(raw_id)
+        cid = item["canonical_id"] if item else raw_id
+        n = self.keepers.remove(team_key, cid)
+        return self._apply_keepers("keeper removed" if n else "no such keeper")
+
+    def _apply_keepers(self, message: str) -> dict[str, object]:
+        warnings = self.source.apply_keepers(self.keepers.triples() if self.keepers else [])
+        labels = {}
+        if self.keepers is not None:
+            for r in self.keepers.rows():
+                labels[str(r["canonical_id"])] = f"keeper · Rd {r['cost_round']}"
+        set_labels = getattr(self.loop, "set_keeper_labels", None)
+        if callable(set_labels):
+            set_labels(labels)
+        out = self._after(message + ("; " + "; ".join(warnings) if warnings else ""))
+        out["keepers"] = self.keeper_view()
+        return out
 
     def search(self, query: str, *, limit: int = 8, position: str = "") -> list[dict[str, object]]:
         return self.finder.search(

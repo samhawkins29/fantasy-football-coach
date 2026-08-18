@@ -193,6 +193,23 @@ class DraftState:
                 mine.append(rp.canonical_id)
         return mine
 
+    def keeper_teams(self) -> list[str]:
+        """Team keys that had keepers seeded."""
+        return list(self._keepers)
+
+    def team_acquisitions(self, team_key: str) -> list[tuple[str | None, bool, int | None]]:
+        """A team's roster so far as ``(canonical_id, unmapped, pick_no)``:
+        seeded keepers first (pick None), then its made picks in pick order.
+        """
+        out: list[tuple[str | None, bool, int | None]] = [
+            (cid, False, None) for cid in self._keepers.get(team_key, [])
+        ]
+        out.extend((None, True, None) for _ in self._keeper_unmapped.get(team_key, []))
+        for rp in self.resolved:
+            if rp.pick.team_key == team_key:
+                out.append((rp.canonical_id, rp.canonical_id is None, rp.pick.pick))
+        return out
+
     def my_unmapped_count(self) -> int:
         """My picks/keepers that resolved nowhere (they still occupy slots)."""
         keeper_unmapped = len(self._keeper_unmapped.get(self.my_team_key, []))

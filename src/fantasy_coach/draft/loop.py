@@ -39,8 +39,10 @@ from fantasy_coach.clients.models import DraftPick, LeagueSettings
 from fantasy_coach.clients.throttle import DRAFT_POLL_INTERVAL
 from fantasy_coach.clients.yahoo import YahooClient
 from fantasy_coach.draft.recommend import (
+    NEED_WEIGHTS,
     Recommendation,
     RankedPlayer,
+    RosterNeeds,
     assign_roster,
     build_recommendation,
     compute_needs,
@@ -48,7 +50,12 @@ from fantasy_coach.draft.recommend import (
     roster_slots,
 )
 from fantasy_coach.draft.state import DraftState, snake_team_for_pick
-from fantasy_coach.draft.survival import RoomState, estimate_survival, room_state
+from fantasy_coach.draft.survival import (
+    RoomState,
+    estimate_survival,
+    need_scale,
+    room_state,
+)
 from fantasy_coach.ingest.canonical import CanonicalPlayer
 from fantasy_coach.ingest.injury import InjuryReport, merge_reports
 from fantasy_coach.ingest.schedule import SeasonSchedule
@@ -238,6 +245,9 @@ class DraftLoop:
         self._recommendation: Recommendation | None = None
         self._room: RoomState = RoomState()
         self._my_upcoming: list[int] = []
+        self._team_slots: dict[str, list] = {}  # every team's assigned roster slots
+        self._team_needs: dict[str, RosterNeeds] = {}
+        self._keeper_labels: dict[str, str] = {}  # canonical_id → "keeper (Rd 6)"
         self._last_picks: list[DraftPick] = []
         self._last_sig: tuple | None = None
         self._last_success: float | None = None
@@ -360,9 +370,20 @@ class DraftLoop:
             risk_preference=self._risk_preference,
             sos_weight=self._sos_weight,
         )
-        slots = assign_roster(roster_slots(self._settings), self._my_roster_infos())
+        # Every team's roster (keepers + live picks) and needs — the founder's
+        # own drives the need weighting; the others feed the survival model
+        # ("who is actually picking before me and what do they still need").
+        self._team_slots = {
+            key: assign_roster(roster_slots(self._settings), self._team_roster_infos(key))
+            for key in self._all_team_keys()
+        }
+        self._team_needs = {k: compute_needs(v) for k, v in self._team_slots.items()}
+        my_key = self.state.my_team_key
+        slots = self._team_slots.get(my_key) or assign_roster(
+            roster_slots(self._settings), self._my_roster_infos()
+        )
         self._slots = slots
-        needs = compute_needs(slots)
+        needs = self._team_needs.get(my_key) or compute_needs(slots)
 
         # Survival (upgrade 2): where my next picks fall + what the room is
         # doing, then P(available) per player — recomputed every changed poll.
@@ -371,6 +392,18 @@ class DraftLoop:
         on_clock = bool(self._my_upcoming) and self._my_upcoming[0] == current_pick
         my_next = self._my_upcoming[0] if self._my_upcoming else None
         my_after = self._my_upcoming[1] if len(self._my_upcoming) > 1 else None
+        positions = {e.position for e in self._board.entries}
+        room_weights = [
+            {pos: NEED_WEIGHTS[n.tag(pos)] for pos in positions}
+            for n in self._team_needs.values()
+        ]
+        scale_next = need_scale(
+            self._intervening_need_weights(current_pick, my_next, positions), room_weights, positions
+        ) if my_next is not None else {}
+        scale_after = need_scale(
+            self._intervening_need_weights(current_pick, my_after, positions), room_weights, positions
+        ) if my_after is not None else {}
+        self._need_scale_next = scale_next
         made = [
             (
                 rp.pick.pick,
@@ -397,6 +430,8 @@ class DraftLoop:
             my_next_pick=my_next,
             my_pick_after=my_after,
             room=self._room,
+            need_scale_next=scale_next,
+            need_scale_after=scale_after,
         )
         self._ranked = rank_available(
             self._board,
@@ -426,6 +461,42 @@ class DraftLoop:
             )
             if note:
                 self._recommendation.reasons.append(note)
+
+    def _all_team_keys(self) -> list[str]:
+        """Every team in round-1 order (configured, observed, or seen in picks)."""
+        order = self._round1_order()
+        if order:
+            return list(order)
+        seen: list[str] = []
+        for p in self._last_picks:
+            if p.team_key and p.team_key not in seen:
+                seen.append(p.team_key)
+        for key in self.state.keeper_teams():
+            if key not in seen:
+                seen.append(key)
+        if self.state.my_team_key and self.state.my_team_key not in seen:
+            seen.append(self.state.my_team_key)
+        return seen
+
+    def _intervening_need_weights(
+        self, current_pick: int, target_pick: int | None, positions: set[str]
+    ) -> list[dict[str, float]]:
+        """Need weights of the teams whose live picks fall in ``[current, target)``."""
+        if target_pick is None:
+            return []
+        made = {p.pick for p in self._last_picks if p.is_made}
+        out: list[dict[str, float]] = []
+        for n in range(current_pick, target_pick):
+            if n in made:
+                continue  # a pre-made keeper pick isn't a live selection
+            key = self._team_for_pick(n)
+            if not key or key == self.state.my_team_key:
+                continue
+            needs = self._team_needs.get(key)
+            if needs is None:
+                continue
+            out.append({pos: NEED_WEIGHTS[needs.tag(pos)] for pos in positions})
+        return out
 
     def _current_pick(self) -> int:
         """The pick on the clock: the first unmade pick (keeper picks may be
@@ -534,9 +605,23 @@ class DraftLoop:
 
     def _my_roster_infos(self) -> list[dict[str, object]]:
         """Display dicts for my keepers + picks, in acquisition order."""
+        return self._team_roster_infos(self.state.my_team_key)
+
+    def _team_roster_infos(self, team_key: str) -> list[dict[str, object]]:
+        """Display dicts for a team's keepers + picks, in acquisition order.
+
+        Keepers seeded via ``seed_keepers`` (live Yahoo rosters) come first;
+        pre-made keeper picks in the pick list (manual / simulated drafts)
+        arrive as picks and are labelled through ``keeper_labels``.
+        """
         infos: list[dict[str, object]] = []
-        for cid in self.state.my_canonical_ids():
-            p = self._by_canonical.get(cid)
+        for cid, unmapped, pick_no in self.state.team_acquisitions(team_key):
+            if unmapped:
+                infos.append(
+                    {"canonical_id": "", "name": "Unmapped pick", "position": "", "team": "", "bye": None, "pick": pick_no}
+                )
+                continue
+            p = self._by_canonical.get(cid or "")
             if p is None:
                 continue
             infos.append(
@@ -546,13 +631,15 @@ class DraftLoop:
                     "position": p.position,
                     "team": p.team,
                     "bye": self._bye_for(p),
+                    "pick": pick_no,
+                    "keeper": self._keeper_labels.get(cid, ""),
                 }
             )
-        for _ in range(self.state.my_unmapped_count()):
-            infos.append(
-                {"canonical_id": "", "name": "Unmapped pick", "position": "", "team": "", "bye": None}
-            )
         return infos
+
+    def set_keeper_labels(self, labels: dict[str, str]) -> None:
+        """Label roster entries that are keepers (``{canonical_id: "Rd 6 keeper"}``)."""
+        self._keeper_labels = dict(labels)
 
     def _round1_order(self) -> list[str]:
         order = [
@@ -570,6 +657,47 @@ class DraftLoop:
             if p.pick == pick_number and p.team_key:
                 return p.team_key
         return snake_team_for_pick(self._round1_order(), pick_number)
+
+    def _teams_snapshot(self, current_pick: int | None) -> list[dict[str, object]]:
+        """Every team's roster + needs + next live pick (the league view)."""
+        my_key = self.state.my_team_key
+        made = {p.pick for p in self._last_picks if p.is_made}
+        total = len(self._last_picks)
+        out: list[dict[str, object]] = []
+        for key in self._all_team_keys():
+            slots = self._team_slots.get(key, [])
+            needs = self._team_needs.get(key)
+            next_pick = None
+            if current_pick is not None:
+                for n in range(current_pick, total + 1):
+                    if n in made and n != current_pick:
+                        continue
+                    if self._team_for_pick(n) == key:
+                        next_pick = n
+                        break
+            out.append(
+                {
+                    "team_key": key,
+                    "name": self._team_name(key),
+                    "is_me": key == my_key,
+                    "roster": [
+                        {"label": s.label, "is_bench": s.is_bench, "player": s.player}
+                        for s in slots
+                    ],
+                    "filled": sum(1 for s in slots if s.player is not None),
+                    "needs": (
+                        {
+                            "open_starters": dict(needs.open_starters),
+                            "open_flex": ["/".join(e) for e in needs.open_flex],
+                            "open_bench": needs.open_bench,
+                        }
+                        if needs
+                        else None
+                    ),
+                    "next_pick": next_pick,
+                }
+            )
+        return out
 
     def _likely_gone(self, limit: int = 8) -> list[dict[str, object]]:
         """Top-ranked available players unlikely to reach my next pick.
@@ -722,6 +850,7 @@ class DraftLoop:
                 "sos_weight": self._sos_weight if self._schedule else 0.0,
             },
             "likely_gone": self._likely_gone(),
+            "teams": self._teams_snapshot(current_pick if not complete else None),
             "recommendation": (
                 {
                     **rec.player.as_dict(),

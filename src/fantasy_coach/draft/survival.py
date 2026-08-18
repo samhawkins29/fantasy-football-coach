@@ -34,7 +34,18 @@ The model, in full:
    never more than about a round). A run on RB
    makes RBs less likely to survive; the model reacts to what is happening in
    *this* draft, not just the market average.
-5. **No ADP.** Players without a market signal (deep sleepers, offline
+5. **Who is actually picking before you.** The teams between now and your
+   pick have rosters. A team that kept a stud RB (or already drafted two)
+   is much less likely to spend its pick on an RB than one with both RB
+   slots open. Each intervening team is weighted at the position by the
+   *same* need weights the founder's own recommendation uses
+   (:data:`~fantasy_coach.draft.recommend.NEED_WEIGHTS`: open starter 1.0 /
+   flex 0.85 / depth 0.55), and the effective number of picks a player at
+   position P must survive is scaled by ``mean need weight of the
+   intervening teams at P ÷ mean need weight of the whole room at P``
+   (``need_scale``, clamped 0.25–2). Fewer effective picks → higher
+   survival. Neutral (1.0) when rosters are unknown.
+6. **No ADP.** Players without a market signal (deep sleepers, offline
    stores) fall back to their rank on the *available* board as a pseudo-ADP
    (``current pick − 1 + rank``: the k-th best player left goes about k
    picks from now) with a wider σ — the honest "the market hasn't priced
@@ -78,6 +89,9 @@ __all__ = [
     "room_state",
     "survival_label",
     "estimate_survival",
+    "need_scale",
+    "NEED_SCALE_MIN",
+    "NEED_SCALE_MAX",
 ]
 
 #: ADP spread floor and slope (σ = max(SIGMA_MIN, SIGMA_SLOPE · ADP)).
@@ -174,7 +188,7 @@ def adp_sigma(adp: float, stdev: float | None = None) -> float:
 
 
 def survival_probability(
-    effective_adp: float, sigma: float, *, current_pick: int, target_pick: int
+    effective_adp: float, sigma: float, *, current_pick: int, target_pick: float
 ) -> float:
     """``P(T ≥ target | T ≥ current)`` under ``T ~ N(effective_adp, σ)``.
 
@@ -254,6 +268,41 @@ def room_state(
     return RoomState(drift=drift, run_excess=run_excess, recent_positions=window)
 
 
+#: Bounds on the roster-need scale (a room can't want a position less than a
+#: quarter or more than twice as much as average — keeps a tiny sample of
+#: intervening teams from swinging survival to 0/1).
+NEED_SCALE_MIN = 0.25
+NEED_SCALE_MAX = 2.0
+
+
+def _clamp_scale(x: float) -> float:
+    return max(NEED_SCALE_MIN, min(NEED_SCALE_MAX, float(x)))
+
+
+def need_scale(
+    intervening: Sequence[Mapping[str, float]],
+    room: Sequence[Mapping[str, float]],
+    positions: Iterable[str],
+) -> dict[str, float]:
+    """``{position: scale}`` from per-team need weights.
+
+    ``intervening`` / ``room`` are ``{position: need weight}`` mappings for
+    the teams picking before your target pick and for every team. Positions
+    the room doesn't weight at all scale 1.0.
+    """
+    out: dict[str, float] = {}
+    for pos in positions:
+        room_w = [float(t.get(pos, 0.0)) for t in room]
+        inter_w = [float(t.get(pos, 0.0)) for t in intervening]
+        if not room_w or not inter_w:
+            out[pos] = 1.0
+            continue
+        room_mean = sum(room_w) / len(room_w)
+        inter_mean = sum(inter_w) / len(inter_w)
+        out[pos] = _clamp_scale(inter_mean / room_mean) if room_mean > 0 else 1.0
+    return out
+
+
 def survival_label(p_next: float | None) -> str:
     """The plain-language availability label for a next-pick probability."""
     if p_next is None:
@@ -274,6 +323,8 @@ def estimate_survival(
     my_next_pick: int | None,
     my_pick_after: int | None,
     room: RoomState | None = None,
+    need_scale_next: Mapping[str, float] | None = None,
+    need_scale_after: Mapping[str, float] | None = None,
 ) -> dict[str, Survival]:
     """Survival estimates for every available player, keyed by canonical id.
 
@@ -286,8 +337,14 @@ def estimate_survival(
             are on the clock), or ``None`` if unknown.
         my_pick_after: The one after that, or ``None``.
         room: The measured room state (drift + runs); ``None`` = neutral.
+        need_scale_next / need_scale_after: ``{position: scale}`` — how much
+            the teams picking before your next / following pick actually
+            want the position relative to the room (see the module
+            docstring, step 5). Missing positions scale 1.0.
     """
     room = room or RoomState()
+    scale_next = need_scale_next or {}
+    scale_after = need_scale_after or {}
     out: dict[str, Survival] = {}
     for p in players:
         cid = str(p.get("canonical_id", ""))
@@ -309,12 +366,14 @@ def estimate_survival(
         eff = max(1.0, base + room.drift - shift)
         p_next = p_after = None
         if my_next_pick is not None:
+            k = (my_next_pick - current_pick) * _clamp_scale(scale_next.get(pos, 1.0))
             p_next = survival_probability(
-                eff, sigma, current_pick=current_pick, target_pick=my_next_pick
+                eff, sigma, current_pick=current_pick, target_pick=current_pick + k
             )
         if my_pick_after is not None:
+            k = (my_pick_after - current_pick) * _clamp_scale(scale_after.get(pos, 1.0))
             p_after = survival_probability(
-                eff, sigma, current_pick=current_pick, target_pick=my_pick_after
+                eff, sigma, current_pick=current_pick, target_pick=current_pick + k
             )
         out[cid] = Survival(
             p_next=p_next,

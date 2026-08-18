@@ -35,6 +35,8 @@ Schema map (what each table is *for*):
   (Yahoo live / Sleeper), merged at read time; every row keeps its vintage.
 * ``durability`` — per-player games-missed history + the clamped availability
   discount and categorical risk flag (a labelled model estimate).
+* ``keepers`` — keeper-league pre-draft rosters: who each team kept, where he
+  was drafted last year, and the round his keeper pick consumes.
 
 v4 widens ``projections`` with the floor/ceiling distribution and
 ``value_board``/``board_meta`` with the floor/ceiling VORPs, the per-week SOS
@@ -291,6 +293,27 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     tuple(
         f"ALTER TABLE stats_history ADD COLUMN {col} REAL NOT NULL DEFAULT 0"
         for col in _IDP_HISTORY_COLUMNS
+    ),
+    # -- v6: keepers (keeper leagues) — one row per kept player per league -----
+    # ``cost_round`` is the pick the keeper consumes; ``last_round`` is where
+    # he was drafted last year (NULL = undrafted) so the cost can be re-derived
+    # from the league's rules if they change.
+    (
+        """
+        CREATE TABLE IF NOT EXISTS keepers (
+          league_key   TEXT NOT NULL,
+          team_key     TEXT NOT NULL,
+          canonical_id TEXT NOT NULL,
+          name         TEXT NOT NULL DEFAULT '',
+          position     TEXT NOT NULL DEFAULT '',
+          last_round   INTEGER,
+          cost_round   INTEGER NOT NULL,
+          source       TEXT NOT NULL DEFAULT 'manual',
+          updated_at   TEXT NOT NULL,
+          PRIMARY KEY (league_key, team_key, canonical_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_keepers_league ON keepers (league_key, team_key)",
     ),
 )
 

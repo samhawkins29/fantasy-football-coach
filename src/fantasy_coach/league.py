@@ -63,6 +63,9 @@ __all__ = [
     "team_key_for_slot",
     "resolve_keepers",
     "keeper_note",
+    "keeper_cost_round",
+    "assign_keeper_rounds",
+    "KeeperConflict",
 ]
 
 _STAT_ID_BY_KEY = {key: sid for sid, key in YAHOO_STAT_KEYS.items()}
@@ -87,12 +90,18 @@ class KeeperRules:
 
 @dataclass(slots=True)
 class Keeper:
-    """One kept player as written in the spec (unresolved)."""
+    """One kept player as written in the spec (unresolved).
+
+    ``round`` is the cost round (the pick he consumes). It may be given
+    directly, or derived from ``last_round`` (where he was drafted last year;
+    ``None`` = undrafted) through :func:`assign_keeper_rounds`.
+    """
 
     team: str  # slot number ("3") or full team key
     player: str  # name or canonical id
     round: int
     position: str = ""
+    last_round: int | None = None
 
 
 @dataclass(slots=True)
@@ -104,6 +113,71 @@ class ResolvedKeeper:
     canonical_id: str
     name: str
     position: str
+    last_round: int | None = None
+
+
+class KeeperConflict(ValueError):
+    """A keeper set that the league's rules can't accommodate."""
+
+
+def keeper_cost_round(last_round: int | None, rules: KeeperRules) -> int:
+    """The pick round one keeper consumes under ``rules``.
+
+    Drafted last year in round ``R``: costs round ``R − cost_rounds_earlier``
+    (never below 1); rounds before ``min_draft_round_to_keep`` are
+    un-keepable (:class:`KeeperConflict`). Undrafted (``None``): the
+    ``undrafted_cost_round``. Multiple undrafted keepers on one team are
+    spread by :func:`assign_keeper_rounds`.
+    """
+    if last_round is None:
+        return rules.undrafted_cost_round
+    if last_round < rules.min_draft_round_to_keep:
+        raise KeeperConflict(
+            f"a player drafted in round {last_round} can't be kept "
+            f"(rounds 1–{rules.min_draft_round_to_keep - 1} are un-keepable)"
+        )
+    return max(1, last_round - rules.cost_rounds_earlier)
+
+
+#: Where a team's 2nd/3rd/4th undrafted keeper lands when round 15 is taken:
+#: the founder's league fills 14, then 16, then 17 (the rounds around 15).
+_UNDRAFTED_FILL_OFFSETS = (0, -1, +1, +2)
+
+
+def assign_keeper_rounds(
+    entries: Sequence[tuple[str, int | None]], rules: KeeperRules, *, rounds: int = 17
+) -> list[tuple[str, int]]:
+    """Cost rounds for one team's keepers ``[(player, last_round|None), …]``.
+
+    Drafted keepers take ``last_round − 3``; undrafted keepers take the
+    undrafted round, then the rounds around it in the league's fill order
+    (15 → 14 → 16 → 17). Raises :class:`KeeperConflict` for more than
+    ``max_keepers``, an un-keepable round, or two keepers needing the same
+    round (a team can't spend one pick twice).
+    """
+    if len(entries) > rules.max_keepers:
+        raise KeeperConflict(f"{len(entries)} keepers — the rules allow {rules.max_keepers}")
+    out: list[tuple[str, int]] = []
+    used: set[int] = set()
+    for player, last in entries:
+        if last is not None:
+            r = keeper_cost_round(last, rules)
+            if r in used:
+                raise KeeperConflict(f"two keepers would both cost round {r}")
+            used.add(r)
+            out.append((player, r))
+    for player, last in entries:
+        if last is None:
+            base = rules.undrafted_cost_round
+            for off in _UNDRAFTED_FILL_OFFSETS:
+                r = base + off
+                if 1 <= r <= rounds and r not in used:
+                    used.add(r)
+                    out.append((player, r))
+                    break
+            else:
+                raise KeeperConflict("no free round left for an undrafted keeper")
+    return out
 
 
 @dataclass(slots=True)
@@ -188,13 +262,28 @@ def load_league_spec(path: str | Path) -> LeagueSpec:
     )
     keepers: list[Keeper] = []
     for team, kept in dict(payload.get("keepers") or {}).items():
-        for k in kept or []:
+        kept = list(kept or [])
+        # Entries may give the cost "round" directly or "last_round" (where
+        # he was drafted last year; null/"undrafted" = undrafted) — the
+        # rules then derive the cost, spreading multiple undrafted keepers.
+        derived: dict[int, int] = {}
+        if rules is not None and any("round" not in k for k in kept):
+            todo = [
+                (i, None if str(k.get("last_round", "")).lower() in ("", "none", "undrafted", "null") else int(k["last_round"]))
+                for i, k in enumerate(kept)
+                if "round" not in k
+            ]
+            for (i, _), (_, r) in zip(todo, assign_keeper_rounds([(str(i), last) for i, last in todo], rules, rounds=int(draft.get("rounds") or 15))):
+                derived[i] = r
+        for i, k in enumerate(kept):
+            last_raw = k.get("last_round")
             keepers.append(
                 Keeper(
                     team=str(team),
                     player=str(k["player"]),
-                    round=int(k["round"]),
+                    round=int(k["round"]) if "round" in k else derived[i],
                     position=normalize_position(str(k.get("position", "") or "")),
+                    last_round=None if last_raw in (None, "", "undrafted") else int(last_raw),
                 )
             )
     playoffs = payload.get("playoffs") or {}
@@ -265,6 +354,7 @@ def resolve_keepers(
                 canonical_id=str(row["canonical_id"]),
                 name=str(row.get("name", k.player)),
                 position=normalize_position(str(row.get("position", ""))),
+                last_round=k.last_round,
             )
         )
     if spec.keeper_rules is not None:

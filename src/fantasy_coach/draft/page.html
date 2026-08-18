@@ -221,6 +221,34 @@
   .rpick .clear { display: none; margin-left: 6px; color: var(--faint); cursor: pointer; font-size: .7rem; }
   body.manual .rpick:hover .clear { display: inline; }
   .rpick .clear:hover { color: var(--danger); }
+
+  /* ---------- keepers + league view ---------- */
+  .keepers { display: none; margin-top: 14px; }
+  body.manual .keepers { display: block; }
+  .keepers summary { cursor: pointer; font-size: .78rem; color: var(--muted); padding: 8px 12px; }
+  .keeper-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; padding: 6px 12px 12px; }
+  .kteam { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font-size: .78rem; }
+  .kteam h4 { font-size: .72rem; color: var(--muted); margin-bottom: 4px; display: flex; justify-content: space-between; }
+  .kteam .k { display: flex; gap: 6px; align-items: center; padding: 2px 0; }
+  .kteam .k .rd { margin-left: auto; color: var(--warn); font-weight: 700; }
+  .kteam .k .x { color: var(--faint); cursor: pointer; }
+  .kteam .k .x:hover { color: var(--danger); }
+  .kform { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 12px; }
+  .kform input, .kform select, .kform button { font: inherit; font-size: .8rem; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .kform button { background: var(--panel); cursor: pointer; }
+  .kresults { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 6px; }
+  .kresults span { font-size: .74rem; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; }
+  .kresults span.active { border-color: var(--accent); color: var(--accent); }
+  .league { margin-top: 14px; }
+  .league-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; padding: 6px 12px 12px; }
+  .lteam { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font-size: .74rem; }
+  .lteam.me { border-color: rgba(53,212,154,.5); }
+  .lteam h4 { font-size: .72rem; margin-bottom: 4px; display: flex; justify-content: space-between; }
+  .lteam .needs { color: var(--warn); font-size: .7rem; margin-bottom: 4px; }
+  .lteam .r { display: flex; gap: 5px; align-items: center; color: var(--muted); }
+  .lteam .r b { color: var(--text); font-weight: 600; }
+  .lteam .r .kp { color: var(--warn); font-size: .62rem; }
+  .run-alert { display: inline-block; margin-left: 10px; padding: 2px 8px; border-radius: 6px; background: rgba(245,165,36,.16); color: var(--warn); font-size: .7rem; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -258,6 +286,20 @@
     <div class="entry-hint">Manual entry mode: as each pick happens in the Yahoo room, type the player and hit Enter — the team defaults to whoever is on the clock. Hover a recent pick and click ✕ to clear a mis-entry. Everything is saved to the store; a restart resumes.</div>
   </section>
 
+  <details class="panel keepers" id="keepers">
+    <summary>Keepers — enter every team's kept players before the draft (cost round = last year's round − 3; rounds 1–3 un-keepable; undrafted → Rd 15, then 14/16/17). Saved to the store.</summary>
+    <div class="kform">
+      <label class="sub">Team</label><select id="k-team"></select>
+      <label class="sub">Player</label><input type="text" id="k-q" placeholder="search…" autocomplete="off">
+      <label class="sub">Drafted last year in round</label>
+      <select id="k-round"><option value="undrafted">undrafted</option></select>
+      <button id="k-add" disabled>Add keeper</button>
+      <span class="entry-msg" id="k-msg"></span>
+    </div>
+    <div class="kresults" id="k-results"></div>
+    <div class="keeper-grid" id="k-grid"></div>
+  </details>
+
   <div class="grid">
     <section class="panel col-main">
       <h2>Top available — need-weighted value</h2>
@@ -292,6 +334,11 @@
       </section>
     </aside>
   </div>
+
+  <details class="panel league" id="league" open>
+    <summary style="cursor:pointer;font-size:.78rem;color:var(--muted);padding:8px 12px;">League — every team's roster (keepers + picks) and open starting needs</summary>
+    <div class="league-grid" id="league-grid"></div>
+  </details>
 
   <div class="foot">
     <span id="foot-counts"></span>
@@ -442,6 +489,70 @@ function wireEntry() {
   });
 }
 
+let kSel = null, kResults = [], kTimer = null, kInit = false;
+
+function initKeeperPanel(s) {
+  if (kInit) return; kInit = true;
+  const rsel = $("k-round");
+  for (let r = 1; r <= 17; r++) { const o = document.createElement("option"); o.value = String(r); o.textContent = "Rd " + r + (r <= 3 ? " (un-keepable)" : " → costs Rd " + Math.max(1, r - 3)); rsel.appendChild(o); }
+  $("k-q").addEventListener("input", () => { clearTimeout(kTimer); kTimer = setTimeout(async () => {
+    const q = $("k-q").value.trim(); if (!q) { kResults = []; kSel = null; renderKResults(); return; }
+    const data = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+    kResults = data.results || []; kSel = kResults[0] || null; renderKResults();
+  }, 90); });
+  $("k-add").addEventListener("click", addKeeper);
+  $("k-q").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addKeeper(); } });
+  fetch("/api/teams").then(r => r.json()).then(d => {
+    $("k-team").innerHTML = (d.teams || []).map(t => `<option value="${esc(t.team_key)}">${esc(t.name)}</option>`).join("");
+  });
+  refreshKeepers();
+}
+
+function renderKResults() {
+  $("k-results").innerHTML = kResults.map(r => `<span class="${kSel && kSel.raw_id === r.raw_id ? "active" : ""}" data-id="${esc(r.raw_id)}">${esc(r.name)} <em class="sub">${esc(r.position)} ${esc(r.team || "")}</em></span>`).join("");
+  for (const el of $("k-results").querySelectorAll("span")) el.addEventListener("click", () => { kSel = kResults.find(r => r.raw_id === el.dataset.id); renderKResults(); });
+  $("k-add").disabled = !kSel;
+}
+
+async function addKeeper() {
+  if (!kSel) return;
+  const lr = $("k-round").value;
+  const res = await fetch("/api/keepers/add", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({team_key: $("k-team").value, player: kSel.raw_id, last_round: lr === "undrafted" ? null : Number(lr)})});
+  const out = await res.json();
+  $("k-msg").textContent = out.ok ? out.message : (out.error || "error");
+  $("k-msg").className = "entry-msg" + (out.ok ? "" : " err");
+  if (out.ok) { $("k-q").value = ""; kResults = []; kSel = null; renderKResults(); if (out.state) render(out.state); renderKeepers(out.keepers); }
+}
+
+async function refreshKeepers() { const d = await (await fetch("/api/keepers")).json(); renderKeepers(d); }
+
+function renderKeepers(d) {
+  if (!d || !d.enabled) { $("k-grid").innerHTML = '<span class="sub">This league has no keeper rules.</span>'; return; }
+  $("k-grid").innerHTML = d.teams.map(t => `
+    <div class="kteam"><h4><span>${esc(t.name)}</span><span>${t.keepers.length}/${d.rules.max_keepers}</span></h4>
+      ${t.keepers.map(k => `<div class="k">${posChip(k.position)}<span>${esc(k.name)}</span>
+        <span class="rd" title="${k.last_round ? "drafted Rd " + k.last_round + " last year" : "undrafted last year"}">Rd ${esc(String(k.cost_round))}</span>
+        <span class="x" title="remove" data-team="${esc(t.team_key)}" data-id="${esc(k.canonical_id)}">✕</span></div>`).join("") || '<span class="sub">— none —</span>'}
+    </div>`).join("");
+  for (const el of $("k-grid").querySelectorAll(".x")) el.addEventListener("click", async () => {
+    const out = await (await fetch("/api/keepers/remove", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({team_key: el.dataset.team, player: el.dataset.id})})).json();
+    if (out.ok) { if (out.state) render(out.state); renderKeepers(out.keepers); }
+  });
+}
+
+function renderLeague(s) {
+  const teams = s.teams || [];
+  if (!teams.length) { $("league-grid").innerHTML = ""; return; }
+  $("league-grid").innerHTML = teams.map(t => {
+    const n = t.needs || {open_starters: {}, open_flex: [], open_bench: 0};
+    const needTxt = [...Object.entries(n.open_starters || {}).map(([p, c]) => c > 1 ? `${p}×${c}` : p), ...(n.open_flex || []).map(f => "FLEX")].join(" · ");
+    const rows = (t.roster || []).filter(r => r.player).map(r => `<div class="r"><span class="sub">${esc(r.label)}</span>${posChip(r.player.position)}<b>${esc(r.player.name)}</b>${r.player.keeper ? `<span class="kp">K</span>` : ""}</div>`).join("");
+    return `<div class="lteam${t.is_me ? " me" : ""}"><h4><span>${esc(t.name)}${t.is_me ? " (you)" : ""}</span><span class="sub">${t.next_pick ? "next #" + t.next_pick : ""}</span></h4>
+      <div class="needs">${needTxt ? "needs: " + esc(needTxt) : "starters set"}</div>${rows || '<span class="sub">—</span>'}</div>`;
+  }).join("");
+}
+
 function renderGone(s) {
   const d = s.draft || {};
   const gone = s.likely_gone || [];
@@ -455,7 +566,8 @@ function renderGone(s) {
 
 function render(s) {
   document.body.classList.toggle("manual", !!s.manual);
-  if (s.manual) { loadTeams(s); syncTeamPicker(s); renderGone(s); }
+  if (s.manual) { loadTeams(s); syncTeamPicker(s); renderGone(s); initKeeperPanel(s); }
+  renderLeague(s);
   $("mode-badge").textContent = (s.mode || "live").toUpperCase();
   $("mode-badge").className = "badge " + (s.mode === "simulation" ? "simulation" : s.mode === "manual" ? "manual" : "live");
   $("league").textContent = s.league_key || "";
@@ -537,7 +649,7 @@ function renderHero(s) {
       <span class="score">${fmt(p.score)}</span></div>`).join("");
   hero.innerHTML = `
     <div class="hero-main">
-      <div class="hero-eyebrow">Best pick now${dialText ? " · " + dialText : ""}</div>
+      <div class="hero-eyebrow">Best pick now${dialText ? " · " + dialText : ""}${(() => { const runs = Object.entries((s.survival || {}).runs || {}).filter(([, x]) => x >= 0.5).map(([p]) => p); return runs.length ? `<span class="run-alert" title="the last 8 picks took this position far more than the market expected — survival shaded">⚡ ${esc(runs.join("/"))} run</span>` : ""; })()}</div>
       <div class="hero-name">${esc(r.name)} ${posChip(r.position)}${injBadge(r)}</div>
       <div class="hero-sub">${esc(r.team || "")}${r.bye ? ` · bye ${esc(String(r.bye))}` : ""}
         · ${esc(r.position)}${esc(String(r.pos_rank))} · tier ${esc(String(r.tier))}${sosStrip(r)}</div>

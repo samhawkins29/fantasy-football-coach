@@ -809,12 +809,48 @@ def setup_league(
         )
     if spec.keepers:
         resolved, warns = resolve_keepers(spec, store.sql("SELECT canonical_id, name, position FROM players"))
-        console.print(f"[dim]keepers: {len(resolved)} resolved[/]")
+        for k in resolved:
+            store.upsert_keeper(
+                spec.league_key, team_key=k.team_key, canonical_id=k.canonical_id,
+                cost_round=k.round, name=k.name, position=k.position,
+                last_round=k.last_round, source="spec",
+            )
+        console.print(
+            f"[dim]keepers: {len(resolved)} resolved and stored (edit live on the "
+            f"draft page or in the spec + re-run)[/]"
+        )
         for w in warns:
             console.print(f"[yellow]keeper warning:[/] {w}")
+    stored = store.keepers(spec.league_key)
+    if stored:
+        console.print(f"[dim]{len(stored)} keeper row(s) in the store for {spec.league_key}[/]")
     for note in spec.notes:
         console.print(f"[dim]note: {note}[/]")
     store.close()
+
+
+def _league_keepers(store, config: Config, league_key: str, spec):
+    """``(team_key, cost_round, canonical_id)`` for the draft — the store's
+    keeper table (what the page edits), seeded from the spec when empty."""
+    rows = store.keepers(league_key)
+    if rows:
+        return [(str(r["team_key"]), int(r["cost_round"]), str(r["canonical_id"])) for r in rows]
+    if spec is not None and spec.keepers:
+        from fantasy_coach.league import resolve_keepers
+
+        resolved, warns = resolve_keepers(
+            spec, store.sql("SELECT canonical_id, name, position FROM players")
+        )
+        for w in warns:
+            console.print(f"[yellow]keeper warning:[/] {w}")
+        for k in resolved:
+            store.upsert_keeper(
+                league_key, team_key=k.team_key, canonical_id=k.canonical_id,
+                cost_round=k.round, name=k.name, position=k.position,
+                last_round=k.last_round, source="spec",
+            )
+        return [(k.team_key, k.round, k.canonical_id) for k in resolved]
+    return []
 
 
 def _build_manual_loop(
@@ -856,16 +892,9 @@ def _build_manual_loop(
     team_names = sim_team_names(league_key, num_teams, sim_slot or 0)
     if spec is not None:
         team_names.update(spec.team_names)  # "teams" in the spec, else "Team N"
-    keepers = []
-    if spec is not None and spec.keepers:
-        from fantasy_coach.league import resolve_keepers
-
-        resolved, warns = resolve_keepers(
-            spec, store.sql("SELECT canonical_id, name, position FROM players")
-        )
-        for w in warns:
-            console.print(f"[yellow]keeper warning:[/] {w}")
-        keepers = [(k.team_key, k.round, k.canonical_id) for k in resolved]
+    keepers = _league_keepers(store, config, league_key, spec)
+    if keepers:
+        console.print(f"[dim]{len(keepers)} keeper(s) pre-marked (their cost-round picks are taken).[/]")
 
     source = ManualPickSource(order, rounds, game_code=league_key.split(".", 1)[0], keepers=keepers)
     if reset:
@@ -921,7 +950,13 @@ def _build_manual_loop(
         f"[dim]Manual entry: {num_teams} teams × {rounds} rounds ({num_teams * rounds} picks); "
         f"you are {team_names.get(team_key, team_key)} — mark picks on the page as they happen.[/]"
     )
-    return loop, ManualDraft(source=source, loop=loop, finder=finder, team_names=team_names)
+    from fantasy_coach.draft.manual import KeeperBook
+
+    book = KeeperBook(store, league_key, keeper_rules, rounds=rounds) if keeper_rules else None
+    ctl = ManualDraft(source=source, loop=loop, finder=finder, team_names=team_names, keepers=book)
+    if book is not None:
+        loop.set_keeper_labels({str(r["canonical_id"]): f"keeper · Rd {r['cost_round']}" for r in book.rows()})
+    return loop, ctl
 
 
 def _build_sim_loop(
@@ -949,20 +984,13 @@ def _build_sim_loop(
     keeper_rules = None
     rounds = None
     if spec is not None:
-        from fantasy_coach.league import resolve_keepers
-
         rounds = spec.rounds
         keeper_rules = spec.keeper_rules
         if spec.my_slot is not None and sim_slot == 0:
             sim_slot = spec.my_slot
-        if spec.keepers:
-            resolved, warns = resolve_keepers(
-                spec, store.sql("SELECT canonical_id, name, position FROM players")
-            )
-            for w in warns:
-                console.print(f"[yellow]keeper warning:[/] {w}")
-            keepers = [(k.team_key, k.round, k.canonical_id) for k in resolved]
-            console.print(f"[dim]{len(keepers)} keeper(s) scripted into the draft.[/]")
+    keepers = _league_keepers(store, config, league_key, spec) or None
+    if keepers:
+        console.print(f"[dim]{len(keepers)} keeper(s) scripted into the draft.[/]")
     sim_slot = sim_slot or 5
     team_key = team.strip() or f"{league_key}.t.{sim_slot}"
     script = script_draft(
