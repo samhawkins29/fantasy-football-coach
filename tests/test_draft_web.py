@@ -34,7 +34,7 @@ def test_state_endpoint_serves_the_snapshot_json(server):
     status, ctype, body = _get(server.url + "api/state")
     assert status == 200
     assert "application/json" in ctype
-    assert json.loads(body) == {"mode": "simulation", "available": [], "stale": False}
+    assert json.loads(body) == {"mode": "simulation", "available": [], "stale": False, "manual": False}
 
 
 def test_unknown_path_is_404(server):

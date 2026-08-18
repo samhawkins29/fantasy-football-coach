@@ -113,7 +113,11 @@ class CoachStore:
         self._now = now or _utc_now_iso
         if str(path) != ":memory:" and self.path.parent != Path("."):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(path))
+        # check_same_thread=False: the draft companion's manual-entry HTTP
+        # threads write picks through the loop, which serializes every store
+        # touch behind its own lock — SQLite's per-thread guard would only
+        # get in the way of that already-safe hand-off.
+        self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         apply_migrations(self.conn)
 
@@ -858,6 +862,29 @@ class CoachStore:
                 )
                 written += 1
         return written
+
+    def draft_picks(self, league_key: str) -> list[DraftPick]:
+        """The made picks recorded for a league, in pick order (resume path).
+
+        Manual-entry mode restores its pick list from here after a restart;
+        ``player_key`` round-trips exactly as recorded, so the draft state's
+        yahoo-id → canonical-id fallback resolution applies unchanged.
+        """
+        rows = self.conn.execute(
+            "SELECT pick, round, team_key, player_key, cost FROM draft_picks "
+            "WHERE league_key = ? ORDER BY pick",
+            (league_key,),
+        ).fetchall()
+        return [
+            DraftPick(
+                pick=int(r["pick"]),
+                round=int(r["round"]),
+                team_key=r["team_key"] or "",
+                player_key=r["player_key"] or "",
+                cost=r["cost"],
+            )
+            for r in rows
+        ]
 
     def clear_draft_picks(self, league_key: str) -> int:
         """Delete a league's recorded picks; return how many were removed.

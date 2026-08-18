@@ -51,6 +51,7 @@
   }
   .badge.live { background: rgba(239,70,102,.15); color: var(--danger); border: 1px solid rgba(239,70,102,.4); }
   .badge.simulation { background: rgba(77,163,255,.14); color: var(--accent-2); border: 1px solid rgba(77,163,255,.4); }
+  .badge.manual { background: rgba(53,212,154,.14); color: var(--accent); border: 1px solid rgba(53,212,154,.4); }
   .bar .league { color: var(--faint); font-size: .8rem; }
   .bar .spacer { flex: 1; }
   .pickmeta { display: flex; gap: 22px; align-items: baseline; }
@@ -192,6 +193,34 @@
   @keyframes slidein { from { transform: translateY(-6px); opacity: 0; } }
 
   .foot { margin-top: 14px; color: var(--faint); font-size: .72rem; display: flex; gap: 18px; flex-wrap: wrap; }
+
+  /* ---------- manual entry ---------- */
+  .entry { display: none; margin: 14px 0 0; padding: 12px 14px; border: 1px solid rgba(53,212,154,.45); border-radius: 12px; background: rgba(53,212,154,.06); }
+  body.manual .entry { display: block; }
+  .entry-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .entry-row label { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+  .entry input[type=text] { flex: 1 1 320px; font: inherit; font-size: 1rem; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); color: var(--text); outline: none; }
+  .entry input[type=text]:focus { border-color: var(--accent); }
+  .entry select, .entry button { font: inherit; font-size: .84rem; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  .entry button.primary { background: var(--accent); color: #0b0f17; font-weight: 800; border-color: var(--accent); }
+  .entry button:disabled { opacity: .5; cursor: default; }
+  .entry-hint { font-size: .7rem; color: var(--faint); margin-top: 6px; }
+  .entry-msg { font-size: .74rem; color: var(--accent); min-height: 1em; margin-left: auto; }
+  .entry-msg.err { color: var(--danger); }
+  .results { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+  .res { display: flex; gap: 10px; align-items: center; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; font-size: .86rem; }
+  .res:hover { border-color: var(--line); }
+  .res.active { background: rgba(53,212,154,.16); border-color: rgba(53,212,154,.5); }
+  .res .meta { color: var(--muted); font-size: .74rem; }
+  .res .key { margin-left: auto; color: var(--faint); font-size: .68rem; }
+  .res.taken { opacity: .5; }
+  .res.taken .meta::after { content: "  · already drafted"; color: var(--danger); }
+  .gone-strip { margin-top: 8px; font-size: .78rem; color: var(--muted); }
+  .gone-strip b { color: var(--warn); }
+  .gone-strip .g { margin-right: 10px; white-space: nowrap; }
+  .rpick .clear { display: none; margin-left: 6px; color: var(--faint); cursor: pointer; font-size: .7rem; }
+  body.manual .rpick:hover .clear { display: inline; }
+  .rpick .clear:hover { color: var(--danger); }
 </style>
 </head>
 <body>
@@ -213,6 +242,21 @@
 
 <div class="wrap">
   <section class="hero" id="hero"><div class="hero-empty">Waiting for the first poll…</div></section>
+
+  <section class="entry" id="entry">
+    <div class="entry-row">
+      <label>Mark pick</label>
+      <input type="text" id="q" placeholder="type a name… (↑/↓ pick, Enter confirms, Esc clears)" autocomplete="off" spellcheck="false">
+      <label>by</label>
+      <select id="team-pick"></select>
+      <button class="primary" id="confirm-btn" disabled>Confirm pick</button>
+      <button id="undo-btn" title="undo the last marked pick">↶ Undo</button>
+      <span class="entry-msg" id="entry-msg"></span>
+    </div>
+    <div class="results" id="results"></div>
+    <div class="gone-strip" id="gone"></div>
+    <div class="entry-hint">Manual entry mode: as each pick happens in the Yahoo room, type the player and hit Enter — the team defaults to whoever is on the clock. Hover a recent pick and click ✕ to clear a mis-entry. Everything is saved to the store; a restart resumes.</div>
+  </section>
 
   <div class="grid">
     <section class="panel col-main">
@@ -318,9 +362,102 @@ async function refresh() {
   render(snap);
 }
 
+let selIdx = 0, results = [], lastQuery = "", searchTimer = null, teamsLoaded = false;
+
+async function api(path, body) {
+  const res = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  const out = await res.json();
+  const msg = $("entry-msg");
+  msg.textContent = out.ok ? out.message : (out.error || "error");
+  msg.className = "entry-msg" + (out.ok ? "" : " err");
+  if (out.ok && out.state) { lastFetchAt = performance.now(); lastAge = out.state.age_seconds ?? 0; render(out.state); }
+  return out;
+}
+
+async function loadTeams(s) {
+  if (teamsLoaded) return;
+  const res = await fetch("/api/teams"); const data = await res.json();
+  const sel = $("team-pick");
+  sel.innerHTML = (data.teams || []).map(t => `<option value="${esc(t.team_key)}">${esc(t.name)}</option>`).join("");
+  teamsLoaded = true;
+}
+
+function syncTeamPicker(s) {
+  const d = s.draft || {};
+  const oc = d.on_the_clock;
+  const sel = $("team-pick");
+  if (oc && oc.team_key && !sel.dataset.touched) sel.value = oc.team_key;
+}
+
+function renderResults() {
+  const box = $("results");
+  box.innerHTML = results.map((r, i) => `
+    <div class="res${i === selIdx ? " active" : ""}${r.available ? "" : " taken"}" data-i="${i}">
+      ${posChip(r.position)}<span>${esc(r.name)}</span>
+      <span class="meta">${esc(r.team || "")}${r.rank ? " · #" + r.rank : ""}${r.pick ? " · pick " + r.pick : ""}</span>
+      <span class="key">${i === selIdx ? "Enter" : ""}</span>
+    </div>`).join("");
+  $("confirm-btn").disabled = !results.length || !results[selIdx] || !results[selIdx].available;
+  for (const el of box.querySelectorAll(".res")) {
+    el.addEventListener("mouseenter", () => { selIdx = Number(el.dataset.i); renderResults(); });
+    el.addEventListener("click", () => { selIdx = Number(el.dataset.i); confirmPick(); });
+  }
+}
+
+async function doSearch() {
+  const q = $("q").value.trim();
+  lastQuery = q;
+  if (!q) { results = []; renderResults(); return; }
+  const res = await fetch("/api/search?q=" + encodeURIComponent(q));
+  const data = await res.json();
+  if ($("q").value.trim() !== q) return; // stale response
+  results = data.results || [];
+  selIdx = Math.max(0, results.findIndex(r => r.available));
+  renderResults();
+}
+
+async function confirmPick() {
+  const r = results[selIdx];
+  if (!r || !r.available) return;
+  const team = $("team-pick").value;
+  const out = await api("/api/pick", {player: r.raw_id, team_key: team});
+  if (out.ok) { $("q").value = ""; results = []; renderResults(); delete $("team-pick").dataset.touched; $("q").focus(); }
+}
+
+function wireEntry() {
+  const q = $("q");
+  q.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 90); });
+  q.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); if (results.length) { selIdx = (selIdx + 1) % results.length; renderResults(); } }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (results.length) { selIdx = (selIdx - 1 + results.length) % results.length; renderResults(); } }
+    else if (e.key === "Enter") { e.preventDefault(); confirmPick(); }
+    else if (e.key === "Escape") { q.value = ""; results = []; renderResults(); }
+  });
+  $("confirm-btn").addEventListener("click", confirmPick);
+  $("undo-btn").addEventListener("click", () => api("/api/undo"));
+  $("team-pick").addEventListener("change", () => { $("team-pick").dataset.touched = "1"; });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && document.activeElement !== q) { e.preventDefault(); api("/api/undo"); }
+  });
+}
+
+function renderGone(s) {
+  const d = s.draft || {};
+  const gone = s.likely_gone || [];
+  const el = $("gone");
+  if (d.complete || !gone.length) { el.innerHTML = ""; return; }
+  const onClock = d.on_the_clock && d.on_the_clock.is_me;
+  const n = onClock ? (d.my_pick_after && d.current_pick ? d.my_pick_after - d.current_pick : null) : d.picks_until_mine;
+  el.innerHTML = `<b>${onClock ? "After this pick, your next is" : "Your pick is"} ${n !== null && n !== undefined ? "in " + n : "—"}</b> — likely gone by then: ` +
+    gone.map(g => `<span class="g">${posChip(g.position)} ${esc(g.name)} <span class="sub">${Math.round(g.p * 100)}%</span></span>`).join("");
+}
+
 function render(s) {
+  document.body.classList.toggle("manual", !!s.manual);
+  if (s.manual) { loadTeams(s); syncTeamPicker(s); renderGone(s); }
   $("mode-badge").textContent = (s.mode || "live").toUpperCase();
-  $("mode-badge").className = "badge " + (s.mode === "simulation" ? "simulation" : "live");
+  $("mode-badge").className = "badge " + (s.mode === "simulation" ? "simulation" : s.mode === "manual" ? "manual" : "live");
   $("league").textContent = s.league_key || "";
 
   const d = s.draft || {};
@@ -500,7 +637,11 @@ function renderRecent(s, d) {
       <span class="no">${esc(String(p.pick))}·R${esc(String(p.round))}</span>
       ${posChip(p.position)}<span>${esc(p.name)}</span>
       <span class="who">${p.is_me ? "YOU" : esc(p.team)}</span>
+      <span class="clear" title="clear this pick (mis-entry)" data-pick="${esc(String(p.pick))}">✕</span>
     </div>`).join("") || '<span class="sub" style="padding: 4px 8px;">No picks yet</span>';
+  for (const el of $("recent").querySelectorAll(".clear")) {
+    el.addEventListener("click", () => api("/api/unmark", {pick: Number(el.dataset.pick)}));
+  }
 }
 
 function tickAge() {
@@ -509,6 +650,7 @@ function tickAge() {
   $("age").textContent = age < 1.2 ? "updated just now" : `updated ${age.toFixed(0)}s ago`;
 }
 
+wireEntry();
 refresh();
 setInterval(refresh, 2000);
 setInterval(tickAge, 500);

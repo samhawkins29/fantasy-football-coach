@@ -23,7 +23,8 @@ The file shape (see ``data/league.json`` for the founder's real league)::
                 "my_slot": null},
       "keeper_rules": {"max_keepers": 4, "min_draft_round_to_keep": 4,
                        "cost_rounds_earlier": 3, "undrafted_cost_round": 15},
-      "keepers": {"3": [{"player": "Puka Nacua", "round": 6}], …}   # slot → keepers
+      "keepers": {"3": [{"player": "Puka Nacua", "round": 6}], …},  # slot → keepers
+      "teams": {"1": "Sam", "2": "Dave", …}                             # slot → name (optional)
     }
 
 ``scoring`` keys are the projection stat keys (``pass_yds``/``rec``/
@@ -119,6 +120,7 @@ class LeagueSpec:
     my_slot: int | None = None
     keeper_rules: KeeperRules | None = None
     keepers: list[Keeper] = field(default_factory=list)
+    team_names: dict[str, str] = field(default_factory=dict)  # team_key → display name
     notes: list[str] = field(default_factory=list)
     path: Path | None = None
 
@@ -196,8 +198,14 @@ def load_league_spec(path: str | Path) -> LeagueSpec:
                 )
             )
     playoffs = payload.get("playoffs") or {}
+    league_key = settings.league_key
+    team_names = {
+        (str(slot) if "." in str(slot) else team_key_for_slot(league_key, int(slot))): str(name)
+        for slot, name in dict(payload.get("teams") or {}).items()
+    }
     return LeagueSpec(
         settings=settings,
+        team_names=team_names,
         name=str(payload.get("name") or ""),
         rounds=int(draft.get("rounds") or 15),
         regular_season_weeks=(

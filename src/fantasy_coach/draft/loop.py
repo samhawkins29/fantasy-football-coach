@@ -231,6 +231,7 @@ class DraftLoop:
         )
 
         self._lock = threading.Lock()
+        self._poll_lock = threading.RLock()  # poll_once from the loop thread + manual entry
         self._board: ValueBoard | None = None
         self._slots: list = []
         self._ranked: list[RankedPlayer] = []
@@ -267,7 +268,13 @@ class DraftLoop:
 
         Raises whatever the source raises — :meth:`run` catches, logs, and
         keeps the last good snapshot (flagged stale once old enough).
+        Serialized: manual entry calls this from the HTTP thread while the
+        loop thread polls too.
         """
+        with self._poll_lock:
+            return self._poll_once()
+
+    def _poll_once(self) -> dict[str, object]:
         status_changed = self._refresh_statuses()
         picks = self._source.fetch()
         self.poll_count += 1
@@ -564,6 +571,38 @@ class DraftLoop:
                 return p.team_key
         return snake_team_for_pick(self._round1_order(), pick_number)
 
+    def _likely_gone(self, limit: int = 8) -> list[dict[str, object]]:
+        """Top-ranked available players unlikely to reach my next pick.
+
+        The "your pick is in N — these are probably gone by then" list: from
+        the need-weighted ranking, players whose survival to my next pick
+        (or, on the clock, to the following one) is below the coin-flip
+        line, in ranking order.
+        """
+        from fantasy_coach.draft.survival import COIN_FLIP_BELOW  # noqa: PLC0415
+
+        on_clock = bool(self._my_upcoming) and self._my_upcoming[0] == self._current_pick()
+        out: list[dict[str, object]] = []
+        for rp in self._ranked[:40]:
+            sv = rp.survival
+            if sv is None:
+                continue
+            p = sv.p_after if on_clock else sv.p_next
+            if p is None or p >= COIN_FLIP_BELOW:
+                continue
+            out.append(
+                {
+                    "canonical_id": rp.entry.canonical_id,
+                    "name": rp.entry.name,
+                    "position": rp.entry.position,
+                    "score": round(rp.score, 1),
+                    "p": round(p, 3),
+                }
+            )
+            if len(out) >= limit:
+                break
+        return out
+
     def _build_snapshot(self) -> dict[str, object]:
         made = self.state.pick_count
         total = len(self._last_picks) if self._last_picks else None
@@ -682,6 +721,7 @@ class DraftLoop:
                 "risk_preference": self._risk_preference,
                 "sos_weight": self._sos_weight if self._schedule else 0.0,
             },
+            "likely_gone": self._likely_gone(),
             "recommendation": (
                 {
                     **rec.player.as_dict(),

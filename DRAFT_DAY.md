@@ -63,13 +63,31 @@ vintage footer.
 
 ## 4. Draft day (when the room opens)
 
+**Without Yahoo API access (the default plan):**
+
+```powershell
+.venv\Scripts\python.exe -m fantasy_coach draft --manual --sim-slot <your slot> --playoff-weight 0.3 --sos-weight 0.5
+```
+
+Opens the board next to the Yahoo draft room. As each pick happens: type the
+name in the "Mark pick" box (`/` focuses it — "jah gib", "cmc", partial or
+misspelled all work), ↑/↓ if needed, **Enter**. The team defaults to whoever
+is on the clock; change the picker only for a traded pick. Mis-entry: **↶
+Undo** (or Ctrl+Z), or hover the pick in *Recent picks* and click ✕. Every
+pick is saved to the store — if the page or the process dies, run the same
+command again and it resumes where you were (`--reset-draft` starts over).
+The hero always shows "your pick is in N — likely gone by then".
+
+**With Yahoo API access (if ever approved):**
+
 ```powershell
 .venv\Scripts\python.exe -m fantasy_coach draft --playoff-weight 0.3 --injury-weight 0.5
 ```
 
-Opens the board next to the Yahoo draft room. It polls picks every ~2.5s,
-re-checks Sleeper statuses every 2 min, auto-detects your team, seeds keepers,
-and recomputes the recommendation after every pick. Undos heal themselves.
+Polls picks every ~2.5s, re-checks Sleeper statuses every 2 min, auto-detects
+your team, seeds keepers, and recomputes after every pick. Undos heal
+themselves. (`--manual --yahoo-sync` gives you both: hand entry with Yahoo
+filling in whatever you haven't marked.)
 
 ## Flags
 
@@ -80,6 +98,7 @@ and recomputes the recommendation after every pick. Undos heal themselves.
 | `--risk r` | Floor↔ceiling tilt in [-1,1]. 0 = median. `-0.5` leans on floors (safe team), `+0.5` on ceilings (upside — chasing a title). VORP/tiers never move. |
 | `--sos-weight s` | Per-week SOS mix in [0,1]: every week valued through its own position-specific matchup; playoff weeks weighted heavier via `--playoff-weight` on top. 0.3–0.5 is sane. |
 | `--sim-seed N` | [simulate] A different, reproducible bot room. |
+| `--manual` | Live draft by hand entry (no Yahoo). `--sim-slot N` = your slot; `--reset-draft` forgets stored picks; `--yahoo-sync` best-effort overlay. |
 | `--status-interval s` | Seconds between live Sleeper status re-checks (default 120; don't go below ~60 — the blob is big). |
 | `--team <key>` | Your team if auto-detect can't find it. |
 | `--no-warm` | Skip the startup re-warm (use if network dies — runs fully from the store). |

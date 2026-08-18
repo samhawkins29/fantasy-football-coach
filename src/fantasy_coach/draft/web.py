@@ -15,6 +15,16 @@ Routes:
   its own ``age_seconds``/``stale`` so the page can grey out a recommendation
   the moment polling falls behind the room.
 
+Manual-entry routes (only when a :class:`~fantasy_coach.draft.manual.ManualDraft`
+is attached — the offline live-draft path):
+
+* ``GET /api/search?q=…[&pos=RB]`` — fuzzy player lookup (available first).
+* ``POST /api/pick`` ``{"player": raw_id, "team_key"?: …, "pick"?: n}`` —
+  mark a pick; ``POST /api/unmark`` ``{"pick": n}``; ``POST /api/undo``;
+  ``POST /api/reset``. Each returns ``{ok, message, state}`` with the
+  recomputed snapshot so the page never waits for the next poll.
+* ``GET /api/teams`` — round-1 order with names (the team picker).
+
 The server binds ``127.0.0.1`` — this is a private cockpit, not a site.
 """
 
@@ -26,6 +36,7 @@ import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 __all__ = ["CompanionServer", "load_page"]
 
@@ -48,6 +59,8 @@ class CompanionServer:
         host: Bind address; loopback by default on purpose.
         port: TCP port; ``0`` lets the OS pick (tests). :attr:`port` reports
             the actual bound port either way.
+        manual: Optional :class:`~fantasy_coach.draft.manual.ManualDraft` —
+            enables the entry routes.
     """
 
     def __init__(
@@ -56,8 +69,10 @@ class CompanionServer:
         *,
         host: str = "127.0.0.1",
         port: int = 8787,
+        manual: object | None = None,
     ) -> None:
         self._snapshot_func = snapshot_func
+        self._manual = manual
         handler = self._make_handler()
         self.httpd = ThreadingHTTPServer((host, port), handler)
         self.httpd.daemon_threads = True
@@ -65,18 +80,68 @@ class CompanionServer:
 
     def _make_handler(self) -> type[BaseHTTPRequestHandler]:
         snapshot_func = self._snapshot_func
+        manual = self._manual
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802 - http.server API
-                path = self.path.split("?", 1)[0]
+                url = urlparse(self.path)
+                path = url.path
                 if path in ("/", "/index.html"):
                     body = load_page().encode("utf-8")
                     self._send(200, "text/html; charset=utf-8", body)
                 elif path == "/api/state":
-                    body = json.dumps(snapshot_func()).encode("utf-8")
-                    self._send(200, "application/json", body)
+                    snap = dict(snapshot_func())
+                    snap["manual"] = manual is not None
+                    self._json(200, snap)
+                elif path == "/api/search" and manual is not None:
+                    params = parse_qs(url.query)
+                    q = (params.get("q") or [""])[0]
+                    pos = (params.get("pos") or [""])[0].upper()
+                    self._json(200, {"results": manual.search(q, position=pos)})
+                elif path == "/api/teams" and manual is not None:
+                    self._json(200, {"teams": manual.teams()})
                 else:
                     self._send(404, "text/plain", b"not found")
+
+            def do_POST(self) -> None:  # noqa: N802 - http.server API
+                path = urlparse(self.path).path
+                if manual is None:
+                    self._json(404, {"ok": False, "error": "manual entry not enabled"})
+                    return
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    payload = json.loads(raw.decode("utf-8")) if raw else {}
+                except json.JSONDecodeError:
+                    self._json(400, {"ok": False, "error": "bad JSON"})
+                    return
+                try:
+                    if path == "/api/pick":
+                        pick = payload.get("pick")
+                        out = manual.mark(
+                            str(payload.get("player", "")),
+                            team_key=str(payload.get("team_key", "") or ""),
+                            pick_no=int(pick) if pick not in (None, "") else None,
+                        )
+                    elif path == "/api/unmark":
+                        out = manual.unmark(int(payload["pick"]))
+                    elif path == "/api/undo":
+                        out = manual.undo()
+                    elif path == "/api/reset":
+                        out = manual.reset()
+                    else:
+                        self._json(404, {"ok": False, "error": "not found"})
+                        return
+                except (ValueError, KeyError) as exc:
+                    self._json(400, {"ok": False, "error": str(exc)})
+                    return
+                out = dict(out)
+                if isinstance(out.get("state"), dict):
+                    out["state"] = {**out["state"], "manual": True}
+                self._json(200, out)
+
+            def _json(self, status: int, payload: object) -> None:
+                self._send(status, "application/json", json.dumps(payload).encode("utf-8"))
 
             def _send(self, status: int, ctype: str, body: bytes) -> None:
                 self.send_response(status)

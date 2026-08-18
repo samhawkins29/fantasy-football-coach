@@ -134,6 +134,7 @@ test path — but the CLI needs the package installed.)
 | `python -m fantasy_coach logout` | Deletes the stored token file. | None |
 | `python -m fantasy_coach config` | Shows which config values are set (secrets masked) and whether OAuth is ready. | None |
 | `python -m fantasy_coach draft --league <key>` | **The live draft companion (M5).** Polls the Yahoo draft room every ~2.5s, rebuilds the drafted set (undo-safe), recomputes the available VORP board with baselines that shift as pools drain, weights it by your unfilled roster slots, and serves an auto-refreshing dark board page at `http://localhost:8787`. Auto-detects your team; seeds keepers from pre-draft rosters. | Polls `draftresults` (throttled) |
+| `python -m fantasy_coach draft --manual` | **The live draft WITHOUT Yahoo API access** (the guaranteed path). Same loop, board, need weighting and survival math — you feed the picks: search-as-you-type (fuzzy: "jah gib", "cmc", "mcafrey"), ↑/↓ + Enter (or click) to confirm, the team defaults to whoever is on the clock (change it for a traded pick), ↶ Undo / ✕ on any recent pick to fix a mis-entry, and every change is saved to the store so a restart resumes (`--reset-draft` to start over). Needs your slot (`--sim-slot N` or `draft.my_slot`); keepers from the spec are pre-marked. `--yahoo-sync` overlays Yahoo picks if the API is ever approved — manual entries always win. | None |
 | `python -m fantasy_coach draft --simulate` | The identical loop fed by a scripted snake draft generated from the stored board — the full offline dress rehearsal (page, roster fill, recommendations, survival labels). Opponents are profiled bots (market / value-hunter / need-filler / reacher / RB-heavy / zero-RB / QB-early / handcuffer / TE-early / panic drafter) with positional need, run-chasing, reach noise, bye and handcuff logic. `--sim-slot N` picks your slot, `--sim-speed K` reveals K picks per poll, `--sim-seed S` a different (reproducible) room. | None |
 | `python -m fantasy_coach setup-league` | **Your league's exact rules, offline.** Reads `data/league.json` (scoring per stat, the full lineup — IDP `D` slot, no kickers, flex-only TE, whatever the league does — playoff weeks, draft length, keeper rules + keepers), stores the settings, and builds the board from the local caches with replacement baselines derived from *this* roster × *this* many teams. No Yahoo needed. `--file` picks another spec. | None (caches) |
 | `python -m fantasy_coach refresh` | **The pre-draft freshness pass (step 6).** Re-pulls everything to its most up-to-date state: nflverse projections/schedule/durability caches, current injury statuses from Sleeper (free, no key) and — when authed — Yahoo statuses + ADP; rebuilds the board; prints before/after data vintage. Every step degrades to a warning. `--skip-yahoo` works without auth. | nflverse + Sleeper (+ Yahoo unless skipped) |
@@ -236,6 +237,22 @@ recommendation narrates it ("Floor 189 / median 250 / ceiling 310 — high-
 variance, upside bet"). `RISK_PREFERENCE` / `--risk` tilts draft value toward
 floor or ceiling; `0` is the identity. Relative uncertainty is the claim, not
 calibrated percentiles — the calibration loop is what checks that later.
+
+### Manual draft entry (the live draft without Yahoo)
+
+`draft --manual` runs the identical `DraftLoop` off a hand-fed pick list
+(`draft/manual.py`): a full snake-shaped list (team per pick from your slot
+order, keeper picks pre-made) that you fill in as the real room drafts.
+`ManualPickSource.mark/unmark/undo` are undo-safe by construction (the loop
+rebuilds the drafted set from the current list every change), each mutation
+recomputes at once and returns the fresh snapshot to the page, the store's
+`draft_picks` mirror is rewritten after every change (restart → `restore`),
+and the page's entry bar (`/` focuses it) does search-as-you-type over the
+whole player table with available players first and taken ones flagged with
+their pick number. The snake position is tracked from pick 1, so the hero
+shows "your pick is in N — likely gone by then: …" from the survival model.
+Yahoo auto-sync is a strictly optional overlay (`--yahoo-sync`) that fills
+open slots from `draftresults`; failures are logged and ignored.
 
 ### Draft survival: "will he last to my next pick?"
 

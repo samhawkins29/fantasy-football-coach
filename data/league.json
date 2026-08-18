@@ -50,11 +50,12 @@
     "undrafted_cost_round": 15
   },
   "keepers": {},
+  "teams": {},
   "notes": [
     "Two divisions, head-to-head; regular season weeks 1-14; playoffs weeks 15-17 (top 6, top-2 seeds bye week 15); no games week 18.",
     "No kickers. TE is flex-only (W/R/T). One team DEF + one IDP (any DL/LB/DB).",
     "Scoring: full PPR confirmed. Everything else here is Yahoo's default (4-pt pass TD, -1 INT, -2 fumble lost, 0.04/yd passing, 0.1/yd rush+rec, IDP tackle 1 / assist 0.5 / sack 2 / INT 3 / FF 2 / FR 2 / TD 6 / safety 2 / PD 1 / block 2) — confirm against the Yahoo settings page and edit 'scoring' if the league differs.",
     "Keepers: rounds 1-3 picks can't be kept; up to 4 keepers; cost = last year's round - 3 (2025 Rd 9 -> 2026 Rd 6); undrafted keepers cost Rd 15 (extra undrafted keepers fill Rd 14/16/17). Enter every team's keepers under 'keepers' as {slot: [{player, round}]} once they're due (Sep 1, 2026).",
-    "Draft: Fri Sep 4 2026, 7:15pm ET, Yahoo online snake, 1:45 per pick. Set draft.my_slot when the order is known."
+    "Draft: Fri Sep 4 2026, 7:15pm ET, Yahoo online snake, 1:45 per pick. Set draft.my_slot when the order is known, and optionally 'teams' {slot: manager name} so the manual-entry team picker shows real names."
   ]
 }

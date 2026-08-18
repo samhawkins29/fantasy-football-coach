@@ -246,6 +246,22 @@ def draft(
         help="No Yahoo, no auth: replay a scripted draft (built from the "
         "stored board) through the identical live loop.",
     ),
+    manual: bool = typer.Option(
+        False, "--manual",
+        help="LIVE DRAFT WITHOUT YAHOO ACCESS: you mark each pick on the page "
+        "as it happens (search-as-you-type, one keystroke to confirm, undo). "
+        "State persists in the store — restart resumes. --yahoo-sync overlays "
+        "Yahoo picks if the API is available.",
+    ),
+    yahoo_sync: bool = typer.Option(
+        False, "--yahoo-sync",
+        help="[manual] Best-effort Yahoo draftresults overlay on the manual "
+        "stream (needs auth + an approved app; failures are ignored).",
+    ),
+    reset_draft: bool = typer.Option(
+        False, "--reset-draft",
+        help="[manual] Forget the picks recorded in the store and start fresh.",
+    ),
     sim_slot: int = typer.Option(
         0, "--sim-slot", help="[simulate] Your snake-draft slot (1..teams). "
         "Default: draft.my_slot from the league spec, else 5."
@@ -333,7 +349,16 @@ def draft(
             )
             raise typer.Exit(code=1)
 
-    if simulate:
+    manual_ctl = None
+    if manual:
+        loop, manual_ctl = _build_manual_loop(
+            store, config, league_key, team, sim_slot=sim_slot,
+            playoff_weight=weight, injury_weight=inj_weight,
+            risk_preference=risk_pref, sos_weight=sos_w,
+            reset=reset_draft, yahoo_sync=yahoo_sync,
+        )
+        poll_interval = poll or 1.5
+    elif simulate:
         loop = _build_sim_loop(
             store, config, league_key, team,
             sim_slot=sim_slot, sim_speed=sim_speed, playoff_weight=weight,
@@ -351,7 +376,7 @@ def draft(
         poll_interval = poll or DRAFT_POLL_INTERVAL
     loop.poll_interval = poll_interval
 
-    server = CompanionServer(loop.snapshot, port=port)
+    server = CompanionServer(loop.snapshot, port=port, manual=manual_ctl)
     server.start()
     console.print(
         f"\n[bold green]Draft companion up[/] — open [bold cyan]{server.url}[/] "
@@ -790,6 +815,113 @@ def setup_league(
     for note in spec.notes:
         console.print(f"[dim]note: {note}[/]")
     store.close()
+
+
+def _build_manual_loop(
+    store, config: Config, league_key: str, team: str,
+    *, sim_slot: int, playoff_weight: float, injury_weight: float,
+    risk_preference: float, sos_weight: float, reset: bool, yahoo_sync: bool,
+):
+    """Wire the manual-entry live loop: stored settings + a hand-fed pick list.
+
+    Returns ``(loop, ManualDraft)``. The pick list is prebuilt from the league
+    spec (teams, rounds, keepers, your slot); previously recorded picks are
+    restored from the store unless ``reset``.
+    """
+    from fantasy_coach.draft import DraftLoop
+    from fantasy_coach.draft.manual import ManualDraft, ManualPickSource, PlayerFinder
+    from fantasy_coach.draft.simulate import sim_team_names
+
+    settings = store.league_settings(league_key)
+    if settings is None:
+        console.print(
+            f"[bold red]No stored settings for {league_key}[/] — run "
+            "[bold]setup-league[/] first (data/league.json)."
+        )
+        raise typer.Exit(code=1)
+    num_teams = settings.max_teams or 10
+    spec = _load_spec(config, league_key)
+    rounds = spec.rounds if spec else max(1, settings.roster_size - settings.injury_slots)
+    keeper_rules = spec.keeper_rules if spec else None
+    if spec is not None and spec.my_slot is not None and sim_slot == 0:
+        sim_slot = spec.my_slot
+    if not team.strip() and sim_slot == 0:
+        console.print(
+            "[bold red]Which slot are you?[/] Pass --sim-slot N (your round-1 draft "
+            "position) or set draft.my_slot in data/league.json."
+        )
+        raise typer.Exit(code=1)
+    team_key = team.strip() or f"{league_key}.t.{sim_slot}"
+    order = [f"{league_key}.t.{slot}" for slot in range(1, num_teams + 1)]
+    team_names = sim_team_names(league_key, num_teams, sim_slot or 0)
+    if spec is not None:
+        team_names.update(spec.team_names)  # "teams" in the spec, else "Team N"
+    keepers = []
+    if spec is not None and spec.keepers:
+        from fantasy_coach.league import resolve_keepers
+
+        resolved, warns = resolve_keepers(
+            spec, store.sql("SELECT canonical_id, name, position FROM players")
+        )
+        for w in warns:
+            console.print(f"[yellow]keeper warning:[/] {w}")
+        keepers = [(k.team_key, k.round, k.canonical_id) for k in resolved]
+
+    source = ManualPickSource(order, rounds, game_code=league_key.split(".", 1)[0], keepers=keepers)
+    if reset:
+        removed = store.clear_draft_picks(league_key)
+        console.print(f"[yellow]Reset:[/] forgot {removed} recorded pick(s).")
+    else:
+        restored = source.restore(store.draft_picks(league_key))
+        if restored:
+            console.print(f"[green]Resumed:[/] {restored} pick(s) restored from the store.")
+    if yahoo_sync:
+        try:
+            from fantasy_coach.auth.session import get_authed_client
+            from fantasy_coach.clients.yahoo import YahooClient
+            from fantasy_coach.draft import YahooPickSource
+
+            config.require_oauth()
+            source.overlay(YahooPickSource(YahooClient(get_authed_client(config)), league_key))
+            console.print("[dim]Yahoo auto-sync overlay enabled (best effort).[/]")
+        except Exception as exc:
+            console.print(f"[yellow]Yahoo sync unavailable ({exc}) — manual entry only.[/]")
+
+    loop = DraftLoop(
+        store,
+        settings,
+        source,
+        my_team_key=team_key,
+        league_key=league_key,
+        mode="manual",
+        team_names=team_names,
+        record_to_store=True,  # persistence: restart resumes from draft_picks
+        schedule=_load_schedule(config, refresh=False),
+        playoff_weight=playoff_weight,
+        injury_weight=injury_weight,
+        risk_preference=risk_preference,
+        sos_weight=sos_weight,
+        draft_order=order,
+        keeper_rules=keeper_rules,
+    )
+    finder = PlayerFinder(
+        {
+            "canonical_id": r["canonical_id"], "name": r["name"], "position": r["position"],
+            "team": r["team"], "overall_rank": r["overall_rank"],
+            "raw_id": r["canonical_id"],
+        }
+        for r in store.sql(
+            "SELECT p.canonical_id, p.name, p.position, p.team, b.overall_rank "
+            "FROM players p LEFT JOIN value_board b "
+            "ON b.canonical_id = p.canonical_id AND b.league_key = ?",
+            [league_key],
+        )
+    )
+    console.print(
+        f"[dim]Manual entry: {num_teams} teams × {rounds} rounds ({num_teams * rounds} picks); "
+        f"you are {team_names.get(team_key, team_key)} — mark picks on the page as they happen.[/]"
+    )
+    return loop, ManualDraft(source=source, loop=loop, finder=finder, team_names=team_names)
 
 
 def _build_sim_loop(
