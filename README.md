@@ -135,6 +135,7 @@ test path — but the CLI needs the package installed.)
 | `python -m fantasy_coach config` | Shows which config values are set (secrets masked) and whether OAuth is ready. | None |
 | `python -m fantasy_coach draft --league <key>` | **The live draft companion (M5).** Polls the Yahoo draft room every ~2.5s, rebuilds the drafted set (undo-safe), recomputes the available VORP board with baselines that shift as pools drain, weights it by your unfilled roster slots, and serves an auto-refreshing dark board page at `http://localhost:8787`. Auto-detects your team; seeds keepers from pre-draft rosters. | Polls `draftresults` (throttled) |
 | `python -m fantasy_coach draft --simulate` | The identical loop fed by a scripted snake draft generated from the stored board — the full offline dress rehearsal (page, roster fill, recommendations, survival labels). Opponents are profiled bots (market / value-hunter / need-filler / reacher / RB-heavy / zero-RB / QB-early / handcuffer / TE-early / panic drafter) with positional need, run-chasing, reach noise, bye and handcuff logic. `--sim-slot N` picks your slot, `--sim-speed K` reveals K picks per poll, `--sim-seed S` a different (reproducible) room. | None |
+| `python -m fantasy_coach setup-league` | **Your league's exact rules, offline.** Reads `data/league.json` (scoring per stat, the full lineup — IDP `D` slot, no kickers, flex-only TE, whatever the league does — playoff weeks, draft length, keeper rules + keepers), stores the settings, and builds the board from the local caches with replacement baselines derived from *this* roster × *this* many teams. No Yahoo needed. `--file` picks another spec. | None (caches) |
 | `python -m fantasy_coach refresh` | **The pre-draft freshness pass (step 6).** Re-pulls everything to its most up-to-date state: nflverse projections/schedule/durability caches, current injury statuses from Sleeper (free, no key) and — when authed — Yahoo statuses + ADP; rebuilds the board; prints before/after data vintage. Every step degrades to a warning. `--skip-yahoo` works without auth. | nflverse + Sleeper (+ Yahoo unless skipped) |
 | `python -m fantasy_coach vintage` | Shows how fresh every stored data slice is (per-source refresh timestamps), and which sources are truly live vs periodic. | None |
 
@@ -154,6 +155,7 @@ Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored):
 | `FANTASY_COACH_TOKEN_PATH` | No | Where tokens are stored. Default `.tokens.json`. |
 | `ODDS_API_KEY` | No | The Odds API key (later modules). |
 | `FANTASYPROS_API_KEY` | No | FantasyPros API key (later modules). |
+| `FANTASY_COACH_LEAGUE_FILE` | No | Offline league spec path (default `data/league.json`) — see "The league spec" below. |
 | `PROJECTION_SOURCE` | No | Which projection source the value engine uses: `nflverse` (free, default — the model in `ingest/projections.py`), `consensus` (blends the nflverse model with market-implied ADP points — see below), or `fantasypros` (needs `FANTASYPROS_API_KEY`). |
 | `CONSENSUS_MODEL_WEIGHT` | No | Consensus blend weight for the nflverse model, in [0,1]. Default `0.7`. Weights renormalize over the signals each player actually has. |
 | `CONSENSUS_MARKET_WEIGHT` | No | Consensus blend weight for the market/ADP-implied signal, in [0,1]. Default `0.3`. |
@@ -181,6 +183,41 @@ Rookies and K/DEF are not covered (no nflverse history / no kicking stat lines)
 online — projections are cached per season under `.cache/`, and every later
 `project()` is served from disk with zero network. Draft day never depends on a
 live nflverse fetch.
+
+### The league spec (`data/league.json`) — the founder's real league
+
+The checked-in spec models Sam's league exactly: **10 teams, full PPR
+(1/rec), keeper league**, lineup `QB · 2 RB · 2 WR · 2 W/R/T · DEF · D (any
+IDP) · 8 BN`, **no kickers**, TE flex-only, regular season weeks 1–14,
+**playoffs weeks 15–17** (top 6, top-2 seeds bye wk 15), no games week 18,
+17-round Yahoo snake draft Fri Sep 4 2026 7:15pm ET (1:45/pick), keeper picks
+due Sep 1. `setup-league` turns it into `LeagueSettings` indistinguishable
+from a live Yahoo pull, so every replacement baseline is derived from that
+lineup across 10 teams (e.g. TE replacement sits where the second flex stops
+taking TEs; the single IDP slot drains the ten best DL/LB/DB) and kickers are
+dropped from the board as unstartable. Everything not specified by the
+league is Yahoo's default and is listed under `notes` — confirm against the
+Yahoo settings page and edit `scoring` if it differs.
+
+**IDPs** are projected from nflverse's current `stats_player_week` asset
+(defensive columns: solo/assist tackles, sacks, INTs, FF/FR, PD, TDs,
+safeties, blocks) through the same rate model, with their own positional
+priors and floor/ceiling spreads; nflverse sub-positions collapse to Yahoo's
+`DL`/`LB`/`DB`, and the `D` slot is a flex over the three. Bots draft IDPs in
+the back stretch (one or two per team).
+
+**Keepers.** `keeper_rules` + `keepers` (`{slot: [{player, round}]}`) drive:
+kept players leave the pool from pick 1, each one consumes the keeping team's
+pick in its cost round (scripted into the simulated draft exactly as Yahoo
+pre-populates them; live mode seeds keepers from the pre-draft rosters),
+your own altered pick slots are honoured (the loop reads the pick on the
+clock as the first *unmade* pick and skips pre-made keeper picks when
+predicting your next turns), and the recommendation says whether the pick
+on the clock is keeper-eligible next year and at what round cost. Enter
+every team's keepers by Sep 1 and re-run `setup-league`. Not yet modelled
+(follow-up): valuing *this year's* keeper decisions (which 4 to keep, at what
+pick cost) and the round-14/16/17 fill order for multiple undrafted keepers —
+the spec takes explicit rounds.
 
 ### Projection distributions: floor / median / ceiling
 

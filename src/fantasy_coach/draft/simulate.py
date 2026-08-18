@@ -51,6 +51,7 @@ def script_draft(
     rounds: int | None = None,
     seed: int = 0,
     profiles: Sequence[BotProfile] | None = None,
+    keepers: Sequence[tuple[str, int, str]] | None = None,
 ) -> list[DraftPick]:
     """Generate a full deterministic snake-draft script from the stored board.
 
@@ -62,6 +63,12 @@ def script_draft(
     ``seed`` picks the bots' reproducible noise stream (a different seed = a
     different but equally plausible room); ``profiles`` overrides the
     archetype mix (one per team slot, round-1 order).
+
+    ``keepers`` — ``(team_key, round, canonical_id)`` triples — are scripted
+    exactly as Yahoo pre-populates them: the kept player fills the keeping
+    team's pick in that round, leaves the pool, and counts toward that team's
+    roster needs. Keepers whose player is not on the board are skipped (the
+    caller reports them).
     """
     league_key = league_key or settings.league_key
     num_teams = num_teams or settings.max_teams or 12
@@ -86,12 +93,23 @@ def script_draft(
         seed=seed,
         profiles=profiles,
     )
+    kept: dict[tuple[str, int], str] = {}
+    on_board = {str(row["canonical_id"]) for row in board}
+    for team_key, rnd_no, cid in keepers or ():
+        if cid in on_board:
+            kept[(team_key, int(rnd_no))] = cid
+            room.reserve(cid)  # off the board from pick 1
     picks: list[DraftPick] = []
     for pick_no in range(1, rounds * num_teams + 1):
         rnd, idx = divmod(pick_no - 1, num_teams)
         team = team_order[idx] if rnd % 2 == 0 else team_order[num_teams - 1 - idx]
-        chosen = room.pick(team, pick_no, rnd + 1)
-        cid = str(chosen["canonical_id"])
+        keeper_cid = kept.get((team, rnd + 1))
+        if keeper_cid is not None:
+            room.record_external(team, pick_no, keeper_cid)
+            cid = keeper_cid
+        else:
+            chosen = room.pick(team, pick_no, rnd + 1)
+            cid = str(chosen["canonical_id"])
         raw_id = raw_id_by_canonical.get(cid, cid)
         picks.append(
             DraftPick(

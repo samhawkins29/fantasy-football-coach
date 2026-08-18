@@ -26,8 +26,9 @@ __all__ = ["YAHOO_STAT_KEYS", "league_scoring", "league_points", "score_stats"]
 #: see ``models.STAT_ID_RECEPTIONS``/``STAT_ID_PASSING_TDS``) and the component
 #: stat line every :class:`~fantasy_coach.ingest.sources.ProjectionRecord`
 #: carries. League stats with no projected component (return yards/TDs, offensive
-#: fumble-return TDs, IDP…) are skipped: they can't be rescored from a projection
+#: fumble-return TDs…) are skipped: they can't be rescored from a projection
 #: that doesn't project them, and they're near-zero EV for skill players anyway.
+#: The IDP block (79–88) is Yahoo's individual-defensive-player categories.
 YAHOO_STAT_KEYS: dict[int, str] = {
     4: "pass_yds",  # Passing Yards
     5: "pass_td",  # Passing Touchdowns (4-pt vs 6-pt leagues live here)
@@ -39,6 +40,16 @@ YAHOO_STAT_KEYS: dict[int, str] = {
     13: "rec_td",  # Receiving Touchdowns
     16: "two_pt",  # 2-Point Conversions
     18: "fum_lost",  # Fumbles Lost
+    79: "tackle_solo",  # Tackle Solo (IDP)
+    80: "tackle_ast",  # Tackle Assist (IDP)
+    81: "sack",  # Sack (IDP)
+    82: "def_int",  # Interception (IDP)
+    83: "ff",  # Fumble Force (IDP)
+    84: "fr",  # Fumble Recovery (IDP)
+    85: "def_td",  # Defensive Touchdown (IDP)
+    86: "safety",  # Safety (IDP)
+    87: "pass_def",  # Pass Defended (IDP)
+    88: "blk",  # Block Kick (IDP)
 }
 
 

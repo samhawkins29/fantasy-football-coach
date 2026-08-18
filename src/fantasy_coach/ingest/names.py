@@ -97,6 +97,19 @@ NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
 # use ``DST`` / ``D/ST`` / ``D``.
 _DEFENSE_POSITIONS = frozenset({"DEF", "DST", "D/ST", "DST/D", "TMDEF"})
 
+#: Individual defensive player (IDP) sub-positions → the Yahoo IDP group they
+#: are drafted/started as. Yahoo rosters IDPs as ``DL`` / ``LB`` / ``DB`` (and
+#: a generic ``D`` slot that accepts all three); nflverse's finer codes
+#: (``DE``/``DT``/``NT``, ``ILB``/``OLB``/``MLB``, ``CB``/``S``/``FS``/``SS``)
+#: collapse onto those groups so projections, VORP baselines and roster slots
+#: all speak the same three positions.
+IDP_GROUPS: dict[str, str] = {
+    "DL": "DL", "DE": "DL", "DT": "DL", "NT": "DL", "EDGE": "DL",
+    "LB": "LB", "ILB": "LB", "OLB": "LB", "MLB": "LB",
+    "DB": "DB", "CB": "DB", "S": "DB", "SS": "DB", "FS": "DB", "SAF": "DB",
+}
+IDP_POSITIONS: frozenset[str] = frozenset({"DL", "LB", "DB"})
+
 # Characters we treat as word separators inside a name (apostrophes are *dropped*
 # so ``Ka'imi`` -> ``kaimi``; hyphens/periods become spaces).
 _SEPARATORS = re.compile(r"[.\-_/]+")
@@ -182,14 +195,17 @@ def normalize_position(position: str | None) -> str:
     """Normalize a position code, collapsing every team-defense spelling to ``DEF``.
 
     Individual positions are simply uppercased (``qb`` → ``QB``). Team defenses
-    (``DST``/``D/ST``/``D``) collapse to ``DEF`` — Yahoo's spelling — so the
-    canonical model has one defense position regardless of source.
+    (``DST``/``D/ST``) collapse to ``DEF`` — Yahoo's spelling — so the
+    canonical model has one defense position regardless of source. IDP
+    sub-positions collapse to their Yahoo group (:data:`IDP_GROUPS`:
+    ``DE`` → ``DL``, ``OLB`` → ``LB``, ``CB`` → ``DB``).
     """
     if not position:
         return ""
     if is_defense_position(position):
         return "DEF"
-    return position.strip().upper()
+    code = position.strip().upper()
+    return IDP_GROUPS.get(code, code)
 
 
 def match_key(name: str | None, position: str | None, team: str | None) -> MatchKey:

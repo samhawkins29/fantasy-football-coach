@@ -93,6 +93,7 @@ __all__ = [
     "BoardEntry",
     "ValueBoard",
     "starter_demand",
+    "startable_positions",
     "replacement_baselines",
     "assign_tiers",
     "build_value_board",
@@ -205,6 +206,9 @@ class ValueBoard:
         num_teams: League size the baselines assumed.
         skipped_no_signal: Players dropped for having neither a projection nor
             an ADP (undraftable — but the count is surfaced, not hidden).
+        skipped_unstartable: Players dropped because no starting slot in this
+            league accepts their position (kickers in a no-K league, IDPs in
+            a league without IDP slots) — worthless to draft here.
         playoff_weeks: The fantasy-playoff weeks the schedule fields used
             (empty when the board was built without a schedule).
         playoff_weight: The blend weight ``w`` the draft values were built
@@ -223,6 +227,7 @@ class ValueBoard:
     scoring: dict[str, float] = field(default_factory=dict)
     num_teams: int = _DEFAULT_NUM_TEAMS
     skipped_no_signal: int = 0
+    skipped_unstartable: int = 0
     playoff_weeks: list[int] = field(default_factory=list)
     playoff_weight: float = 0.0
     injury_weight: float = 0.0
@@ -277,6 +282,23 @@ def starter_demand(
             pos = normalize_position(slot.position)
             dedicated[pos] = dedicated.get(pos, 0) + slot.count * num_teams
     return dedicated, flex
+
+
+def startable_positions(settings: LeagueSettings) -> set[str]:
+    """Every position at least one starting slot (dedicated or flex) accepts.
+
+    Empty when the settings carry no roster definition — callers then treat
+    every position as startable (offline-built settings must not blank the
+    board).
+    """
+    positions: set[str] = set()
+    for slot in settings.roster_positions:
+        if not slot.is_starting_position or slot.position in BENCH_POSITIONS:
+            continue
+        if slot.count <= 0:
+            continue
+        positions.update(_slot_positions(slot))
+    return positions
 
 
 def replacement_baselines(
@@ -458,6 +480,8 @@ def build_value_board(
     """
     scoring = league_scoring(settings)
     teams = num_teams or settings.max_teams or _DEFAULT_NUM_TEAMS
+    startable = startable_positions(settings)
+    unstartable = 0
 
     by_gsis: dict[str, CanonicalPlayer] = {}
     if players is not None:
@@ -474,6 +498,10 @@ def build_value_board(
         canonical = by_gsis.get(rec.source_id)
         position = normalize_position(canonical.position if canonical else rec.position)
         if not position:
+            continue
+        if startable and position not in startable:
+            unstartable += 1  # e.g. K in a no-kicker league — never startable
+            projected_gsis.add(rec.source_id)
             continue
         projected_gsis.add(rec.source_id)
         points = score_stats(rec.stats, scoring) if rec.stats else rec.points
@@ -526,6 +554,9 @@ def build_value_board(
             if (p.ids.gsis_id or "") in projected_gsis:
                 continue
             if not p.position:
+                continue
+            if startable and p.position not in startable:
+                unstartable += 1
                 continue
             adp = p.market.adp
             if adp is not None:
@@ -676,6 +707,7 @@ def build_value_board(
         scoring=scoring,
         num_teams=teams,
         skipped_no_signal=skipped,
+        skipped_unstartable=unstartable,
         playoff_weeks=pweeks,
         playoff_weight=playoff_weight if schedule is not None else 0.0,
         injury_weight=injury_weight if risk is not None else 0.0,

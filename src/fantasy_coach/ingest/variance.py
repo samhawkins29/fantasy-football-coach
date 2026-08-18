@@ -79,6 +79,9 @@ POSITION_CV_PRIOR: dict[str, float] = {
     "RB": 0.65,
     "WR": 0.70,
     "TE": 0.80,
+    "DL": 0.75,  # sack-driven: boom/bust
+    "LB": 0.50,  # tackle volume: the steadiest IDP group
+    "DB": 0.65,
 }
 _DEFAULT_CV_PRIOR = 0.65
 

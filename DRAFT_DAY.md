@@ -25,6 +25,18 @@ it), plus projections / schedule / durability / Sleeper + Yahoo statuses / ADP,
 and builds the value board. Set `YAHOO_LEAGUE_KEY=<game>.l.<id>` in `.env` so
 you can drop `--league` everywhere.
 
+## 1b. Your league's rules (once; again by Sep 1 with keepers)
+
+```powershell
+# data/league.json holds the league exactly: 10 teams, full PPR, QB/2RB/2WR/2FLEX/DEF/D(IDP)/8BN,
+# no K, playoffs wk15-17, 17 rounds, keeper rules. Fill draft.my_slot + keepers when known.
+.venv\Scripts\python.exe -m fantasy_coach setup-league     # stores settings, builds the board (offline)
+.venv\Scripts\python.exe -m fantasy_coach refresh --skip-yahoo   # latest nflverse/Sleeper, IDP included
+```
+
+Check the printed replacement baselines (QB/RB/WR/TE/LB/DL/DB) and the
+`notes` — everything not confirmed is Yahoo default scoring; edit and re-run.
+
 ## 2. The week before: dress rehearsal
 
 ```powershell
@@ -75,7 +87,10 @@ and recomputes the recommendation after every pick. Undos heal themselves.
 
 All four dials default to `PLAYOFF_EMPHASIS` / `INJURY_EMPHASIS` /
 `RISK_PREFERENCE` / `SOS_EMPHASIS` in `.env` (0.0 = off; the board is then
-bit-identical to the certified base). Survival probabilities need ADP (Yahoo
+bit-identical to the certified base). `--sim-slot` defaults to
+`draft.my_slot` in the league spec; keepers in the spec are scripted into the
+simulated draft (kept players gone from pick 1, each in its cost round) and
+the recommendation carries a keeper-eligibility line every pick. Survival probabilities need ADP (Yahoo
 `draft_analysis`, pulled by `refresh`/warm) — without it they fall back to
 board rank with a wide spread and say so (`source: rank`).
 

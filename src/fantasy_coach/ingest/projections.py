@@ -37,6 +37,9 @@ Honest limitations (flagged, not hidden):
   The draft board must fill rookies from ADP/market signals (M4/M5 concern).
 * **K and DEF are not covered** — nflverse weekly data carries no kicking or
   team-defense stat lines. Same mitigation.
+* **IDPs (DL/LB/DB) are covered** from the defensive columns of nflverse's
+  current ``stats_player_week`` asset (tackles, sacks, INTs, FF/FR, PD, TDs,
+  safeties, blocks) — same rate model, positional priors per IDP group.
 * Past production ≈ opportunity proxy; the §4.1 opportunity/environment
   adjustments happen downstream in M4, not here.
 
@@ -99,7 +102,26 @@ PROJECTED_STAT_KEYS: dict[str, tuple[str, ...]] = {
         "rushing_2pt_conversions",
         "receiving_2pt_conversions",
     ),
+    # IDP components (nflverse ``stats_player_week`` defensive columns; the
+    # legacy ``player_stats`` files lack them, so IDPs need the current asset
+    # — see ``NflverseSource.weekly_stats``).
+    "tackle_solo": ("def_tackles_solo",),
+    "tackle_ast": ("def_tackle_assists",),
+    "sack": ("def_sacks",),
+    "def_int": ("def_interceptions",),
+    "ff": ("def_fumbles_forced",),
+    "fr": ("fumble_recovery_opp",),
+    "def_td": ("def_tds",),
+    "safety": ("def_safeties",),
+    "pass_def": ("def_pass_defended",),
+    "blk": ("def_punt_blocks", "def_pat_blocks", "def_fg_blocks"),
 }
+
+#: The IDP component keys (a subset of :data:`PROJECTED_STAT_KEYS`).
+IDP_STAT_KEYS: frozenset[str] = frozenset({
+    "tackle_solo", "tackle_ast", "sack", "def_int", "ff", "fr", "def_td",
+    "safety", "pass_def", "blk",
+})
 
 #: Reference scoring for the convenience ``points`` total: half-PPR, 4-pt pass
 #: TD — Yahoo-default-shaped. **Not** league truth; M4 rescores ``stats``.
@@ -114,13 +136,27 @@ REFERENCE_SCORING: dict[str, float] = {
     "rec_td": 6.0,
     "fum_lost": -2.0,
     "two_pt": 2.0,
+    # Yahoo-default IDP scoring (a league's own modifiers override all of it).
+    "tackle_solo": 1.0,
+    "tackle_ast": 0.5,
+    "sack": 2.0,
+    "def_int": 3.0,
+    "ff": 2.0,
+    "fr": 2.0,
+    "def_td": 6.0,
+    "safety": 2.0,
+    "pass_def": 1.0,
+    "blk": 2.0,
 }
 
 #: The honesty label stamped into every cache file (and this source's records).
 PROJECTION_NOTE = "model estimate (nflverse-based): recency-weighted per-game rates, regressed to positional priors"
 
 #: Positions this model can project (see module docstring for why K/DEF aren't).
-_PROJECTABLE_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
+#: IDP groups (DL/LB/DB — nflverse sub-positions already collapsed by
+#: ``normalize_position``) project through the same rate model on the
+#: defensive component stats.
+_PROJECTABLE_POSITIONS = frozenset({"QB", "RB", "WR", "TE", "DL", "LB", "DB"})
 
 #: NFL regular season length (2021+). The games ceiling and full-season anchor.
 _FULL_SEASON_GAMES = 17.0

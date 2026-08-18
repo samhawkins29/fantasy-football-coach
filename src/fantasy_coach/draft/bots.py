@@ -85,6 +85,13 @@ ELITE_PICKS = 8.0
 NOISE_SLOPE = 0.12
 #: K/DEF never before this many of the bot's rounds remain.
 KICKER_ROUNDS_LEFT = 2
+#: Individual defensive players (IDP-lite leagues) drafted in the back stretch
+#: — each bot draws its own threshold from this range so the room doesn't
+#: take ten IDPs in the same round.
+IDP_ROUNDS_LEFT = (3, 8)
+#: At most this many IDPs per team in total (one-slot IDP leagues).
+IDP_TOTAL_CAP = 2
+IDP_POSITIONS = ("DL", "LB", "DB")
 #: A backup QB (1-QB leagues) only in the last rounds; a second TE only in
 #: the very last ones (rooms rarely roster two). Each bot draws its own
 #: threshold from these ranges so the whole room doesn't flip on one round.
@@ -96,7 +103,7 @@ BACKUP_PICKS = 4.0
 #: Handcuff logic switches on once this share of the draft is done.
 HANDCUFF_AFTER_FRACTION = 0.5
 #: Position caps per team (RB/WR are bench depth — uncapped).
-POSITION_CAPS: dict[str, int] = {"QB": 2, "TE": 2, "K": 1, "DEF": 1}
+POSITION_CAPS: dict[str, int] = {"QB": 2, "TE": 2, "K": 1, "DEF": 1, "DL": 2, "LB": 2, "DB": 2}
 SUPERFLEX_QB_CAP = 3
 #: "Elite" = this positional rank or better (for the QB/TE-early premium) and
 #: "my RB1/RB2 worth handcuffing" = this RB rank or better.
@@ -149,6 +156,7 @@ class _Team:
     picks: list[Mapping[str, object]] = field(default_factory=list)
     backup_qb_rounds: int = 3
     backup_te_rounds: int = 2
+    idp_rounds: int = 5
 
     def pos_count(self, pos: str) -> int:
         return sum(1 for p in self.picks if p.get("position") == pos)
@@ -190,6 +198,7 @@ class BotRoom:
                 profile=profs[i % len(profs)],
                 backup_qb_rounds=self._rng.randint(*BACKUP_QB_ROUNDS_LEFT),
                 backup_te_rounds=self._rng.randint(*BACKUP_TE_ROUNDS_LEFT),
+                idp_rounds=self._rng.randint(*IDP_ROUNDS_LEFT),
             )
             for i, key in enumerate(team_keys)
         }
@@ -222,6 +231,11 @@ class BotRoom:
         self._record(team, pick_no, chosen)
         return chosen
 
+    def reserve(self, canonical_id: str) -> None:
+        """Take a player off the board without assigning him yet (a keeper
+        whose cost-round pick comes later — nobody else may draft him)."""
+        self._taken.add(canonical_id)
+
     def record_external(self, team_key: str, pick_no: int, canonical_id: str) -> None:
         """Record a pick made outside the room (e.g. the founder's real pick)."""
         row = self._rows.get(canonical_id)
@@ -252,6 +266,11 @@ class BotRoom:
             return False
         if pos in ("K", "DEF") and rounds_left > KICKER_ROUNDS_LEFT:
             return False
+        if pos in IDP_POSITIONS:
+            if sum(team.pos_count(p) for p in IDP_POSITIONS) >= IDP_TOTAL_CAP:
+                return False
+            if rounds_left > team.idp_rounds:
+                return False
         if pos in ("QB", "TE") and have >= 1 and not self._settings.is_superflex:
             limit = team.backup_qb_rounds if pos == "QB" else team.backup_te_rounds
             if needs.tag(pos) != NEED_STARTER and rounds_left > limit:
@@ -321,7 +340,7 @@ class BotRoom:
                 u += NEED_STARTER_PICKS * prof.need_weight
             elif tag == NEED_FLEX:
                 u += NEED_FLEX_PICKS * prof.need_weight
-            elif pos in ("QB", "TE", "K", "DEF"):
+            elif pos not in ("RB", "WR"):
                 u -= BACKUP_PICKS  # bench-only at a one-starter position
 
             # Runs pull in the drafters who still *need* the position (the

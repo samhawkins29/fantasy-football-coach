@@ -321,7 +321,9 @@ def test_kicker_and_defense_never_vanish():
         canon("K2", "Other Leg", "K"),  # no ADP at all
         CanonicalPlayer.for_defense("SF"),  # no ADP defense
     ]
-    board = build_value_board(projections, make_settings([("WR", 1)], max_teams=1), players=players)
+    board = build_value_board(
+        projections, make_settings([("WR", 1), ("K", 1), ("DEF", 1)], max_teams=1), players=players
+    )
     by_name = {e.name: e for e in board.entries}
     assert by_name["Leg Guy"].value_source == SOURCE_ADP
     assert by_name["Other Leg"].value_source == SOURCE_FLAT
@@ -329,6 +331,27 @@ def test_kicker_and_defense_never_vanish():
     assert by_name["SF DST"].value_source == SOURCE_FLAT
     assert by_name["SF DST"].position == "DEF"
     assert board.skipped_no_signal == 0
+
+
+def test_unstartable_positions_are_dropped_and_counted():
+    # No-kicker league (like the founder's): a K with ADP is still worthless.
+    projections = [
+        proj("A", "Vet Alpha", "WR", rec_yds=2000.0),
+        proj("B", "Vet Beta", "WR", rec_yds=1000.0),
+        proj("K9", "Proj Kicker", "K", rec_yds=0.0),
+    ]
+    players = [
+        canon("A", "Vet Alpha", "WR", gsis="A", adp=1.0),
+        canon("K1", "Leg Guy", "K", adp=140.0),
+    ]
+    board = build_value_board(projections, make_settings([("WR", 1)], max_teams=1), players=players)
+    assert {e.position for e in board.entries} == {"WR"}
+    assert board.skipped_unstartable == 2  # the projected K and the ADP K
+    # Settings without any roster definition drop nothing.
+    from fantasy_coach.clients.models import LeagueSettings
+
+    open_board = build_value_board(projections, LeagueSettings(max_teams=1), players=players)
+    assert {e.position for e in open_board.entries} == {"WR", "K"}
 
 
 def test_skill_player_with_no_projection_and_no_adp_is_counted_not_listed():
@@ -368,7 +391,9 @@ def test_board_writes_value_back_onto_canonical_players():
     ]
     alpha = canon("A", "Vet Alpha", "WR", gsis="A")
     kicker = canon("K1", "Leg Guy", "K")
-    board = build_value_board(projections, make_settings([("WR", 1)], max_teams=1), players=[alpha, kicker])
+    board = build_value_board(
+        projections, make_settings([("WR", 1), ("K", 1)], max_teams=1), players=[alpha, kicker]
+    )
     entry = next(e for e in board.entries if e.name == "Vet Alpha")
     assert alpha.value.vorp == entry.vorp
     assert alpha.value.tier == entry.tier

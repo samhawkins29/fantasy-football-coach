@@ -29,6 +29,7 @@ DEFAULT_TOKEN_PATH = ".tokens.json"
 # scope parameter entirely" (see YahooOAuthClient.create_authorization_url).
 DEFAULT_SCOPE = ""
 DEFAULT_PROJECTION_SOURCE = "nflverse"  # free, no key (framework §2.5 free-first)
+DEFAULT_LEAGUE_FILE = "data/league.json"
 DEFAULT_CACHE_DIR = ".cache"
 DEFAULT_DB_PATH = "data/coach.sqlite3"  # single-file SQLite store (git-ignored)
 
@@ -79,6 +80,9 @@ class Config:
             (default) keeps raw season value; ``~0.5`` values every week
             through its own matchup (playoff weeks still weighted heavier
             by ``playoff_emphasis`` on top).
+        league_file: The offline league spec (``data/league.json`` by
+            default; env ``FANTASY_COACH_LEAGUE_FILE``) — the founder's exact
+            rules for the value engine, plus draft length and keepers.
         cache_dir: Local data-cache directory (projections, schedule etc.;
             git-ignored).
         db_path: The single-file SQLite data store (git-ignored via
@@ -101,6 +105,7 @@ class Config:
     injury_emphasis: float = 0.0
     risk_preference: float = 0.0
     sos_emphasis: float = 0.0
+    league_file: Path = field(default_factory=lambda: Path(DEFAULT_LEAGUE_FILE))
     cache_dir: Path = field(default_factory=lambda: Path(DEFAULT_CACHE_DIR))
     db_path: Path = field(default_factory=lambda: Path(DEFAULT_DB_PATH))
 
@@ -174,6 +179,7 @@ class Config:
             injury_emphasis=injury_emphasis,
             risk_preference=risk_preference,
             sos_emphasis=sos_emphasis,
+            league_file=Path(environ.get("FANTASY_COACH_LEAGUE_FILE", DEFAULT_LEAGUE_FILE)),
             cache_dir=Path(environ.get("FANTASY_COACH_CACHE_DIR", DEFAULT_CACHE_DIR)),
             db_path=Path(environ.get("FANTASY_COACH_DB_PATH", DEFAULT_DB_PATH)),
         )

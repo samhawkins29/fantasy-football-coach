@@ -31,6 +31,10 @@ RawDict = dict[str, object]
 #: several ways depending on how old the league is.
 BENCH_POSITIONS = frozenset({"BN", "IR", "IL", "IR+", "IL+", "NA"})
 
+#: Yahoo's generic individual-defensive-player slot and what it accepts.
+IDP_SLOT = "D"
+IDP_SLOT_POSITIONS: tuple[str, ...] = ("DL", "LB", "DB")
+
 #: Yahoo stat ids worth naming — these are the ones that define a format.
 STAT_ID_RECEPTIONS = 11  # PPR value lives here
 STAT_ID_PASSING_TDS = 5  # 4-pt vs 6-pt passing TD leagues
@@ -105,12 +109,18 @@ class RosterPosition:
 
     @property
     def is_flex(self) -> bool:
-        """True for multi-position slots (``W/R/T``, ``Q/W/R/T``)."""
-        return "/" in self.position
+        """True for multi-position slots (``W/R/T``, ``Q/W/R/T``, IDP ``D``).
+
+        Yahoo's generic IDP slot ``D`` accepts any defensive player
+        (``DL``/``LB``/``DB``) — it is a flex in everything but spelling.
+        """
+        return "/" in self.position or self.position == IDP_SLOT
 
     @property
     def flex_positions(self) -> list[str]:
         """The positions this slot accepts (``["W", "R", "T"]`` for a flex)."""
+        if self.position == IDP_SLOT:
+            return list(IDP_SLOT_POSITIONS)
         return self.position.split("/") if self.is_flex else [self.position]
 
 

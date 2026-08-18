@@ -252,6 +252,15 @@ class NflverseSource:
         (``recent_team``/``interceptions`` vs ``team``/``passing_interceptions``);
         consumers handle both (see ``projections.PROJECTED_STAT_KEYS``).
         """
+        if "weekly" not in self._fetchers:
+            # Prefer nflverse's *current* asset: it is the only one that
+            # carries defensive (IDP) columns for every season, and the
+            # legacy ``import_weekly_data`` URLs are stale for 2025+. Fall
+            # back to the library only if the direct read fails.
+            try:
+                return self._weekly_stats_direct(years)
+            except Exception:  # network / asset drift — try the library path
+                pass
         try:
             return self._fetch("weekly", list(years))
         except Exception as exc:

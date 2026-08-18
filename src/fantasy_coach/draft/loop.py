@@ -52,6 +52,7 @@ from fantasy_coach.draft.survival import RoomState, estimate_survival, room_stat
 from fantasy_coach.ingest.canonical import CanonicalPlayer
 from fantasy_coach.ingest.injury import InjuryReport, merge_reports
 from fantasy_coach.ingest.schedule import SeasonSchedule
+from fantasy_coach.league import KeeperRules, keeper_note
 from fantasy_coach.store.store import CoachStore
 from fantasy_coach.value.board import ValueBoard, build_value_board
 from fantasy_coach.value.injury import build_risk_index
@@ -146,7 +147,17 @@ class DraftLoop:
             predicting whose pick is whose before round 1 has been observed
             — the simulator knows its own order; live mode learns it from
             Yahoo's prefilled ``team_key``s or the first round.
+        keeper_rules: The league's keeper mechanics, when it is a keeper
+            league — the recommendation then says whether the pick on the
+            clock will be keepable next year and at what cost.
         time_func / sleep_func: Injectable clock (tests never sleep).
+
+    Keeper picks: Yahoo pre-populates each kept player as a *made* pick in
+    the round it costs — possibly far ahead of the pick on the clock. The
+    loop therefore reads "the current pick" as the first **unmade** pick in
+    the list (not made+1) and skips already-made picks when predicting your
+    next turns, so a keeper in your round 6 is correctly not "your next
+    pick" (the simulator scripts keepers the same way).
     """
 
     def __init__(
@@ -171,6 +182,7 @@ class DraftLoop:
         risk_preference: float = 0.0,
         sos_weight: float = 0.0,
         draft_order: Sequence[str] | None = None,
+        keeper_rules: KeeperRules | None = None,
         time_func: Callable[[], float] = time.time,
         sleep_func: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -185,6 +197,7 @@ class DraftLoop:
         self._risk_preference = risk_preference
         self._sos_weight = sos_weight
         self._draft_order = list(draft_order or [])
+        self._keeper_rules = keeper_rules
         self.league_key = league_key or settings.league_key
         self.mode = mode
         self.poll_interval = poll_interval
@@ -346,7 +359,7 @@ class DraftLoop:
 
         # Survival (upgrade 2): where my next picks fall + what the room is
         # doing, then P(available) per player — recomputed every changed poll.
-        current_pick = self.state.pick_count + 1
+        current_pick = self._current_pick()
         self._my_upcoming = self._upcoming_my_picks(current_pick, count=2)
         on_clock = bool(self._my_upcoming) and self._my_upcoming[0] == current_pick
         my_next = self._my_upcoming[0] if self._my_upcoming else None
@@ -399,6 +412,21 @@ class DraftLoop:
             picks_until_next=picks_until_next,
             on_the_clock=on_clock,
         )
+        if self._recommendation is not None and self._keeper_rules is not None:
+            decided_pick = my_next if my_next is not None else current_pick
+            note = keeper_note(
+                (decided_pick - 1) // self._num_teams + 1, self._keeper_rules
+            )
+            if note:
+                self._recommendation.reasons.append(note)
+
+    def _current_pick(self) -> int:
+        """The pick on the clock: the first unmade pick (keeper picks may be
+        pre-made further down the list), else made + 1."""
+        for p in sorted(self._last_picks, key=lambda p: p.pick):
+            if not p.is_made:
+                return p.pick
+        return self.state.pick_count + 1
 
     def _upcoming_my_picks(self, current_pick: int, count: int = 2) -> list[int]:
         """My next ``count`` pick numbers from ``current_pick`` on (inclusive).
@@ -411,8 +439,11 @@ class DraftLoop:
         if total is None:
             return []
         my_key = self.state.my_team_key
+        made = {p.pick for p in self._last_picks if p.is_made}
         out: list[int] = []
         for n in range(current_pick, total + 1):
+            if n in made and n != current_pick:
+                continue  # a pre-made keeper pick is not a turn on the clock
             if self._team_for_pick(n) == my_key:
                 out.append(n)
                 if len(out) >= count:
@@ -537,7 +568,7 @@ class DraftLoop:
         made = self.state.pick_count
         total = len(self._last_picks) if self._last_picks else None
         complete = total is not None and made >= total
-        current_pick = made + 1 if not complete else made
+        current_pick = self._current_pick() if not complete else made
         num = self._num_teams
         current_round = (current_pick - 1) // num + 1
         pick_in_round = (current_pick - 1) % num + 1

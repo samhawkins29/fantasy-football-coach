@@ -262,7 +262,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const posChip = (p) => `<span class="pos ${/^(QB|RB|WR|TE|K|DEF)$/.test(p) ? p : "unknown"}">${esc(p || "?")}</span>`;
+const posChip = (p) => `<span class="pos ${/^(QB|RB|WR|TE|K|DEF)$/.test(p) ? p : /^(DL|LB|DB)$/.test(p) ? "DEF" : "unknown"}">${esc(p || "?")}</span>`;
 const fmt = (v, d=1) => (v === null || v === undefined) ? "—" : Number(v).toFixed(d);
 const injBadge = (p) => {
   let out = "";

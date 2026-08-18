@@ -12,6 +12,10 @@ Commands:
              (projections, schedule, durability, Sleeper + Yahoo injury
              status, ADP), rebuild the board, and report data vintage — run
              it right before the draft.
+    setup-league  Load your league's exact rules from the offline spec
+             (``data/league.json``: scoring, roster incl. IDP / no-K,
+             playoffs, draft length, keepers), store them, and build the
+             board from the local caches — no Yahoo needed.
     vintage  Show how fresh every stored data slice is. No network.
 
 Run ``python -m fantasy_coach --help`` for usage.
@@ -243,7 +247,8 @@ def draft(
         "stored board) through the identical live loop.",
     ),
     sim_slot: int = typer.Option(
-        5, "--sim-slot", help="[simulate] Your snake-draft slot (1..teams)."
+        0, "--sim-slot", help="[simulate] Your snake-draft slot (1..teams). "
+        "Default: draft.my_slot from the league spec, else 5."
     ),
     sim_speed: int = typer.Option(
         1, "--sim-speed", help="[simulate] Picks revealed per poll."
@@ -680,6 +685,113 @@ def refresh(
     store.close()
 
 
+def _load_spec(config: Config, league_key: str = ""):
+    """The offline league spec when present and matching ``league_key``.
+
+    Returns ``None`` (never raises) when the file is missing or describes a
+    different league — the store's stored settings then stand alone.
+    """
+    from fantasy_coach.league import load_league_spec
+
+    path = config.league_file
+    if not path.exists():
+        return None
+    try:
+        spec = load_league_spec(path)
+    except Exception as exc:
+        console.print(f"[yellow]league spec {path} unreadable ({exc}) — ignored[/]")
+        return None
+    if league_key and spec.league_key != league_key:
+        return None
+    return spec
+
+
+@app.command(name="setup-league")
+def setup_league(
+    file: str = typer.Option(
+        "", "--file", "-f",
+        help="League spec JSON. Default: FANTASY_COACH_LEAGUE_FILE / data/league.json.",
+    ),
+    no_warm: bool = typer.Option(
+        False, "--no-warm", help="Store the settings only; don't rebuild the board."
+    ),
+) -> None:
+    """Load your league's exact rules offline and build the board for them.
+
+    Reads the spec (scoring per stat, the full lineup — IDP slots, no
+    kickers, flex-only TE, whatever the league does — playoff weeks, draft
+    length, keeper rules + keepers), stores the settings under the spec's
+    league key, and rebuilds the value board from the local projection /
+    schedule / durability caches with replacement baselines derived from
+    THIS roster across THIS many teams. Runs with zero Yahoo access; run
+    ``refresh --skip-yahoo`` afterwards whenever you want fresher data.
+    """
+    from fantasy_coach.ingest.consensus import market_adp_from_players
+    from fantasy_coach.ingest.projections import default_season, make_projection_source
+    from fantasy_coach.league import load_league_spec, resolve_keepers
+    from fantasy_coach.store import CoachStore, warm_store
+    from fantasy_coach.value.board import startable_positions
+
+    config = Config.load()
+    path = file.strip() or str(config.league_file)
+    try:
+        spec = load_league_spec(path)
+    except Exception as exc:
+        console.print(f"[bold red]Could not read league spec {path}:[/] {exc}")
+        raise typer.Exit(code=1)
+    settings = spec.settings
+    console.print(
+        f"[bold]{spec.name or spec.league_key}[/] — {spec.num_teams} teams, "
+        f"{spec.rounds} rounds, playoffs wk{settings.playoff_start_week}+ "
+        f"({settings.num_playoff_teams} teams), startable: "
+        + ", ".join(sorted(startable_positions(settings)))
+        + (" · keeper league" if spec.is_keeper_league else "")
+    )
+    store = CoachStore(config.db_path)
+    store.upsert_league_settings(settings, num_teams=spec.num_teams)
+    store.stamp_vintage(f"league_spec:{spec.league_key}", detail=str(path))
+    if no_warm:
+        console.print(f"[green]Stored settings for {spec.league_key}.[/]")
+        store.close()
+        return
+    season = default_season()
+    projection_source = make_projection_source(
+        config, market=lambda: market_adp_from_players(store.canonical_players())
+    )
+    result = warm_store(
+        store,
+        settings,
+        projection_source=projection_source,
+        num_teams=spec.num_teams,
+        season=season,
+        schedule=_load_schedule(config, refresh=False),
+        playoff_weight=config.playoff_emphasis,
+        durability=_load_durability(config),
+        injury_weight=config.injury_emphasis,
+        risk_preference=config.risk_preference,
+        sos_weight=config.sos_emphasis,
+    )
+    console.print("[dim]" + result.summary() + "[/]")
+    meta = store.board_meta(spec.league_key)
+    if meta is not None:
+        import json as _json
+
+        baselines = _json.loads(meta["baselines"])
+        console.print(
+            "[dim]replacement baselines (league pts): "
+            + ", ".join(f"{p} {v:.0f}" for p, v in sorted(baselines.items()))
+            + "[/]"
+        )
+    if spec.keepers:
+        resolved, warns = resolve_keepers(spec, store.sql("SELECT canonical_id, name, position FROM players"))
+        console.print(f"[dim]keepers: {len(resolved)} resolved[/]")
+        for w in warns:
+            console.print(f"[yellow]keeper warning:[/] {w}")
+    for note in spec.notes:
+        console.print(f"[dim]note: {note}[/]")
+    store.close()
+
+
 def _build_sim_loop(
     store, config: Config, league_key: str, team: str,
     *, sim_slot: int, sim_speed: int, playoff_weight: float,
@@ -700,8 +812,30 @@ def _build_sim_loop(
         )
         raise typer.Exit(code=1)
     num_teams = settings.max_teams or 12
+    spec = _load_spec(config, league_key)
+    keepers = None
+    keeper_rules = None
+    rounds = None
+    if spec is not None:
+        from fantasy_coach.league import resolve_keepers
+
+        rounds = spec.rounds
+        keeper_rules = spec.keeper_rules
+        if spec.my_slot is not None and sim_slot == 0:
+            sim_slot = spec.my_slot
+        if spec.keepers:
+            resolved, warns = resolve_keepers(
+                spec, store.sql("SELECT canonical_id, name, position FROM players")
+            )
+            for w in warns:
+                console.print(f"[yellow]keeper warning:[/] {w}")
+            keepers = [(k.team_key, k.round, k.canonical_id) for k in resolved]
+            console.print(f"[dim]{len(keepers)} keeper(s) scripted into the draft.[/]")
+    sim_slot = sim_slot or 5
     team_key = team.strip() or f"{league_key}.t.{sim_slot}"
-    script = script_draft(store, settings, league_key=league_key, seed=seed)
+    script = script_draft(
+        store, settings, league_key=league_key, seed=seed, rounds=rounds, keepers=keepers
+    )
     console.print(
         f"[dim]Simulating a {num_teams}-team, {len(script) // num_teams}-round "
         f"snake draft ({len(script)} picks, bot seed {seed}); you draft from "
@@ -722,6 +856,7 @@ def _build_sim_loop(
         risk_preference=risk_preference,
         sos_weight=sos_weight,
         draft_order=[f"{league_key}.t.{slot}" for slot in range(1, num_teams + 1)],
+        keeper_rules=keeper_rules,
     )
 
 
@@ -819,6 +954,7 @@ def _build_live_loop(
         injury_weight=injury_weight,
         risk_preference=risk_preference,
         sos_weight=sos_weight,
+        keeper_rules=(spec.keeper_rules if (spec := _load_spec(config, league_key)) else None),
     )
 
     # Seed keepers / pre-rostered players so they are never recommended.

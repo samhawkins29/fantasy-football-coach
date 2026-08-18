@@ -58,8 +58,10 @@ SCHEDULE_NOTE = (
 )
 
 #: Positions the difficulty measure covers (the projectable ones — K/DEF have
-#: no per-position points-allowed signal worth modelling here).
-_SOS_POSITIONS = frozenset({"QB", "RB", "WR", "TE"})
+#: no per-position points-allowed signal worth modelling here). For IDP groups
+#: the "defense" charged is the opponent *offense* that yielded the tackles /
+#: sacks — the same per-position points-allowed machinery, mirrored.
+_SOS_POSITIONS = frozenset({"QB", "RB", "WR", "TE", "DL", "LB", "DB"})
 
 #: NFL regular-season weeks (18 since 2021; every team plays 17 + one bye).
 _REG_SEASON_WEEKS = 18

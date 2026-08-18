@@ -70,6 +70,23 @@ STAT_HISTORY_STAT_COLUMNS: tuple[str, ...] = (
     "two_pt",
     "carries",
     "targets",
+    # IDP components (v5 widened existing files; fresh files get them in v1).
+    "tackle_solo",
+    "tackle_ast",
+    "sack",
+    "def_int",
+    "ff",
+    "fr",
+    "def_td",
+    "safety",
+    "pass_def",
+    "blk",
+)
+
+#: The IDP columns v5 adds to ``stats_history`` on pre-existing files.
+_IDP_HISTORY_COLUMNS: tuple[str, ...] = (
+    "tackle_solo", "tackle_ast", "sack", "def_int", "ff", "fr", "def_td",
+    "safety", "pass_def", "blk",
 )
 
 _STAT_COLS_DDL = ",\n  ".join(
@@ -269,6 +286,11 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         "ALTER TABLE value_board ADD COLUMN sos_vorp REAL",
         "ALTER TABLE board_meta ADD COLUMN risk_preference REAL NOT NULL DEFAULT 0",
         "ALTER TABLE board_meta ADD COLUMN sos_weight REAL NOT NULL DEFAULT 0",
+    ),
+    # -- v5: IDP stat columns on stats_history (league support: DL/LB/DB) ----
+    tuple(
+        f"ALTER TABLE stats_history ADD COLUMN {col} REAL NOT NULL DEFAULT 0"
+        for col in _IDP_HISTORY_COLUMNS
     ),
 )
 
