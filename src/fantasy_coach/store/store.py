@@ -260,7 +260,11 @@ class CoachStore:
     # -- players -------------------------------------------------------------
 
     def upsert_players(
-        self, players: Iterable[CanonicalPlayer], *, fill_only: bool = False
+        self,
+        players: Iterable[CanonicalPlayer],
+        *,
+        fill_only: bool = False,
+        merge: bool = False,
     ) -> int:
         """Upsert canonical players; return how many rows were written.
 
@@ -268,11 +272,29 @@ class CoachStore:
         degraded path for identity rows synthesized from projection metadata,
         which must never overwrite richer Yahoo-crosswalked rows (they carry
         yahoo ids, byes, and statuses the synthesis lacks).
+
+        ``merge=True`` (the Sleeper-catalog path) updates existing rows
+        **field-by-field, non-destructively**: a non-empty incoming value wins
+        (fresh team/position/ids), an empty one keeps whatever the row already
+        had (a catalog with no bye must not blank a Yahoo-crosswalked bye).
         """
-        conflict = (
-            "DO NOTHING"
-            if fill_only
-            else """DO UPDATE SET
+        if fill_only:
+            conflict = "DO NOTHING"
+        elif merge:
+            conflict = """DO UPDATE SET
+                  gsis_id = COALESCE(excluded.gsis_id, gsis_id),
+                  yahoo_id = COALESCE(excluded.yahoo_id, yahoo_id),
+                  sleeper_id = COALESCE(excluded.sleeper_id, sleeper_id),
+                  name = CASE WHEN excluded.name != '' THEN excluded.name ELSE name END,
+                  clean_name = CASE WHEN excluded.clean_name != '' THEN excluded.clean_name ELSE clean_name END,
+                  position = CASE WHEN excluded.position != '' THEN excluded.position ELSE position END,
+                  team = CASE WHEN excluded.team != '' THEN excluded.team ELSE team END,
+                  bye_week = COALESCE(excluded.bye_week, bye_week),
+                  status = CASE WHEN excluded.status != '' THEN excluded.status ELSE status END,
+                  is_defense = MAX(is_defense, excluded.is_defense),
+                  updated_at = excluded.updated_at"""
+        else:
+            conflict = """DO UPDATE SET
                   gsis_id = excluded.gsis_id,
                   yahoo_id = excluded.yahoo_id,
                   sleeper_id = excluded.sleeper_id,
@@ -285,7 +307,6 @@ class CoachStore:
                   is_defense = excluded.is_defense,
                   resolution_method = excluded.resolution_method,
                   updated_at = excluded.updated_at"""
-        )
         written = 0
         with self.conn:
             for p in players:
@@ -318,6 +339,67 @@ class CoachStore:
         if written:
             self.stamp_vintage("players")
         return written
+
+    def fold_duplicate_players(self, *, prefix: str = "SLP_") -> int:
+        """Fold ``{prefix}*`` rows into same-named canonical rows; return count.
+
+        The Sleeper catalog keys players it can't map to a gsis id as
+        ``SLP_{sleeper_id}`` — but many of those players already exist in the
+        store under their gsis id (the catalog's gsis coverage is patchy).
+        Wherever exactly one non-prefixed row shares the ``(clean_name,
+        position)`` key, the prefixed row's ids/team/status are merged into it
+        (non-destructively) and the duplicate is deleted — otherwise ADP/name
+        resolution would see two of every star and refuse to match either.
+        """
+        dupes = self.conn.execute(
+            f"""
+            SELECT s.canonical_id AS slp_id, c.canonical_id AS canon_id,
+                   s.sleeper_id, s.yahoo_id, s.team, s.status
+            FROM players s
+            JOIN players c
+              ON c.clean_name = s.clean_name AND c.position = s.position
+             AND c.canonical_id NOT LIKE '{prefix}%'
+            WHERE s.canonical_id LIKE '{prefix}%' AND s.clean_name != ''
+              AND (SELECT COUNT(*) FROM players c2
+                   WHERE c2.clean_name = s.clean_name AND c2.position = s.position
+                     AND c2.canonical_id NOT LIKE '{prefix}%') = 1
+            """
+        ).fetchall()
+        folded = 0
+        with self.conn:
+            for row in dupes:
+                self.conn.execute(
+                    """
+                    UPDATE players SET
+                      sleeper_id = COALESCE(sleeper_id, ?),
+                      yahoo_id = COALESCE(yahoo_id, ?),
+                      team = CASE WHEN ? != '' THEN ? ELSE team END,
+                      status = CASE WHEN status = '' THEN ? ELSE status END,
+                      updated_at = ?
+                    WHERE canonical_id = ?
+                    """,
+                    (
+                        row["sleeper_id"],
+                        row["yahoo_id"],
+                        row["team"] or "",
+                        row["team"] or "",
+                        row["status"] or "",
+                        self._now(),
+                        row["canon_id"],
+                    ),
+                )
+                self.conn.execute(
+                    "UPDATE OR IGNORE adp SET canonical_id = ? WHERE canonical_id = ?",
+                    (row["canon_id"], row["slp_id"]),
+                )
+                self.conn.execute(
+                    "DELETE FROM adp WHERE canonical_id = ?", (row["slp_id"],)
+                )
+                self.conn.execute(
+                    "DELETE FROM players WHERE canonical_id = ?", (row["slp_id"],)
+                )
+                folded += 1
+        return folded
 
     def canonical_players(self, *, adp_source: str | None = None) -> list[CanonicalPlayer]:
         """Rebuild :class:`CanonicalPlayer` records with stored ADP attached.

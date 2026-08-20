@@ -1,0 +1,121 @@
+{
+ "19": {
+  "player_id": "19",
+  "first_name": "Joe",
+  "last_name": "Flacco",
+  "position": "QB",
+  "team": "CIN",
+  "active": true,
+  "gsis_id": "00-0026158",
+  "yahoo_id": 8795,
+  "depth_chart_position": "QB",
+  "depth_chart_order": 2,
+  "years_exp": 18,
+  "injury_status": null,
+  "fantasy_positions": [
+   "QB"
+  ]
+ },
+ "13302": {
+  "player_id": "13302",
+  "first_name": "Adam",
+  "last_name": "Randall",
+  "position": "RB",
+  "team": "BAL",
+  "active": true,
+  "gsis_id": null,
+  "yahoo_id": null,
+  "depth_chart_position": "RB",
+  "depth_chart_order": 3,
+  "years_exp": 0,
+  "injury_status": null,
+  "fantasy_positions": [
+   "RB"
+  ]
+ },
+ "2091": {
+  "player_id": "2091",
+  "first_name": "Bashaud",
+  "last_name": "Breeland",
+  "position": "CB",
+  "team": "ARI",
+  "active": true,
+  "gsis_id": " 00-0031052",
+  "yahoo_id": 27630,
+  "depth_chart_position": null,
+  "depth_chart_order": null,
+  "years_exp": 8,
+  "injury_status": null,
+  "fantasy_positions": [
+   "DB"
+  ]
+ },
+ "PHI": {
+  "player_id": "PHI",
+  "first_name": "Philadelphia",
+  "last_name": "Eagles",
+  "position": "DEF",
+  "team": "PHI",
+  "active": true,
+  "gsis_id": null,
+  "yahoo_id": null,
+  "depth_chart_position": null,
+  "depth_chart_order": null,
+  "years_exp": null,
+  "injury_status": null,
+  "fantasy_positions": [
+   "DEF"
+  ]
+ },
+ "2881": {
+  "player_id": "2881",
+  "first_name": "Tyler",
+  "last_name": "Slavin",
+  "position": "WR",
+  "team": null,
+  "active": false,
+  "gsis_id": null,
+  "yahoo_id": 29002,
+  "depth_chart_position": null,
+  "depth_chart_order": null,
+  "years_exp": 1,
+  "injury_status": null,
+  "fantasy_positions": [
+   "WR"
+  ]
+ },
+ "2801": {
+  "player_id": "2801",
+  "first_name": "DeAndrew",
+  "last_name": "White",
+  "position": "WR",
+  "team": null,
+  "active": true,
+  "gsis_id": "00-0031511",
+  "yahoo_id": 28800,
+  "depth_chart_position": null,
+  "depth_chart_order": null,
+  "years_exp": 7,
+  "injury_status": null,
+  "fantasy_positions": [
+   "WR"
+  ]
+ },
+ "13940": {
+  "player_id": "13940",
+  "first_name": "Bruno",
+  "last_name": "Fina",
+  "position": "OL",
+  "team": "BUF",
+  "active": true,
+  "gsis_id": null,
+  "yahoo_id": null,
+  "depth_chart_position": "OL",
+  "depth_chart_order": null,
+  "years_exp": 0,
+  "injury_status": null,
+  "fantasy_positions": [
+   "OL"
+  ]
+ }
+}

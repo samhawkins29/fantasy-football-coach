@@ -39,7 +39,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from fantasy_coach.clients.models import DraftPick
-from fantasy_coach.ingest.names import clean_name
+from fantasy_coach.draft.state import off_board_id
+from fantasy_coach.ingest.names import clean_name, normalize_position
 from fantasy_coach.league import KeeperConflict, KeeperRules, assign_keeper_rounds
 
 __all__ = [
@@ -544,12 +545,38 @@ class ManualDraft:
             ],
         }
 
-    def add_keeper(self, team_key: str, raw_id: str, *, last_round: int | None, cost_round: int | None = None) -> dict[str, object]:
+    def add_keeper(
+        self,
+        team_key: str,
+        raw_id: str,
+        *,
+        last_round: int | None,
+        cost_round: int | None = None,
+        off_position: str = "",
+        off_name: str = "",
+    ) -> dict[str, object]:
+        """Record a keeper. ``raw_id`` normally names a store player; when the
+        player is off-board (a rookie/DEF the store missed — rare with the
+        Sleeper catalog loaded), pass ``off_position`` (+ optional
+        ``off_name``) instead and the keeper is recorded under an off-board id
+        that still consumes the right cost-round pick and roster slot.
+        """
         if self.keepers is None:
             raise ValueError("this league has no keeper rules")
-        item = self.finder.lookup(raw_id)
+        item = self.finder.lookup(raw_id) if raw_id else None
         if item is None:
-            raise ValueError(f"unknown player {raw_id!r}")
+            pos = normalize_position(off_position)
+            if not pos:
+                raise ValueError(
+                    f"unknown player {raw_id!r} — pass off_position to record "
+                    "an off-board keeper"
+                )
+            name = (off_name or raw_id or f"Off-board {pos}").strip()
+            item = {
+                "canonical_id": off_board_id(pos, name),
+                "name": name,
+                "position": pos,
+            }
         self.keepers.add(
             team_key, item["canonical_id"], name=item["name"], position=item["position"],
             last_round=last_round, cost_round=cost_round,
@@ -585,6 +612,39 @@ class ManualDraft:
     def mark(self, raw_id: str, *, team_key: str = "", pick_no: int | None = None) -> dict[str, object]:
         pick = self.source.mark(raw_id, team_key=team_key or None, pick_no=pick_no)
         return self._after(f"marked pick {pick.pick} ({self.team_names.get(pick.team_key, pick.team_key)})")
+
+    def mark_unknown(
+        self,
+        position: str,
+        *,
+        name: str = "",
+        team_key: str = "",
+        pick_no: int | None = None,
+    ) -> dict[str, object]:
+        """Record an **off-board pick** — a player the store doesn't know
+        (P0-2c: a deep rookie or obscure DEF another manager just drafted).
+
+        The pick consumes the slot and a roster spot at ``position`` (the
+        off-board id encodes it), so whose-turn / picks-until-next / survival
+        all stay correct and the loop never stalls waiting for a player the
+        finder can't find. With the Sleeper catalog loaded this is rare — but
+        the draft clock doesn't care about rare.
+        """
+        pos = normalize_position(position)
+        if not pos:
+            raise ValueError("an off-board pick needs a position (QB/RB/…/DEF)")
+        raw = off_board_id(pos, name)
+        # Two anonymous off-board LBs must be two picks, not one moved pick —
+        # suffix a counter until the id is unique among made picks.
+        taken = self.source.picks_by_player()
+        base, n = raw, 2
+        while raw in taken:
+            raw = f"{base} #{n}"
+            n += 1
+        pick = self.source.mark(raw, team_key=team_key or None, pick_no=pick_no)
+        who = self.team_names.get(pick.team_key, pick.team_key)
+        label = name.strip() or f"off-board {pos}"
+        return self._after(f"marked pick {pick.pick} ({who}) — {label}")
 
     def unmark(self, pick_no: int) -> dict[str, object]:
         removed = self.source.unmark(pick_no)

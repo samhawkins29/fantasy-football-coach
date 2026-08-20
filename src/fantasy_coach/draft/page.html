@@ -283,7 +283,17 @@
     </div>
     <div class="results" id="results"></div>
     <div class="gone-strip" id="gone"></div>
-    <div class="entry-hint">Manual entry mode: as each pick happens in the Yahoo room, type the player and hit Enter — the team defaults to whoever is on the clock. Hover a recent pick and click ✕ to clear a mis-entry. Everything is saved to the store; a restart resumes.</div>
+    <div class="entry-row" style="margin-top:8px">
+      <label title="the safety net: the room drafted someone our board doesn't know (deep rookie, obscure DEF) — record the slot + position so the draft math never stalls">Off-board pick</label>
+      <select id="off-pos">
+        <option value="">position…</option>
+        <option>QB</option><option>RB</option><option>WR</option><option>TE</option>
+        <option>K</option><option>DEF</option><option>DL</option><option>LB</option><option>DB</option>
+      </select>
+      <input type="text" id="off-name" placeholder="name (optional)" autocomplete="off" spellcheck="false" style="flex:0 1 220px">
+      <button id="off-btn" disabled>Record off-board</button>
+    </div>
+    <div class="entry-hint">Manual entry mode: as each pick happens in the Yahoo room, type the player and hit Enter — the team defaults to whoever is on the clock. Hover a recent pick and click ✕ to clear a mis-entry. If a pick isn't in the search at all (rookie/DEF the store missed), use <b>Off-board pick</b> — it consumes the slot + a roster spot at that position so whose-turn and survival stay right. Everything is saved to the store; a restart resumes.</div>
   </section>
 
   <details class="panel keepers" id="keepers">
@@ -483,6 +493,15 @@ function wireEntry() {
   $("confirm-btn").addEventListener("click", confirmPick);
   $("undo-btn").addEventListener("click", () => api("/api/undo"));
   $("team-pick").addEventListener("change", () => { $("team-pick").dataset.touched = "1"; });
+  $("off-pos").addEventListener("change", () => { $("off-btn").disabled = !$("off-pos").value; });
+  $("off-btn").addEventListener("click", async () => {
+    const pos = $("off-pos").value;
+    if (!pos) return;
+    const out = await api("/api/pick_offboard", {
+      position: pos, name: $("off-name").value.trim(), team_key: $("team-pick").value,
+    });
+    if (out.ok) { $("off-pos").value = ""; $("off-name").value = ""; $("off-btn").disabled = true; delete $("team-pick").dataset.touched; }
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && document.activeElement !== q) { e.preventDefault(); api("/api/undo"); }

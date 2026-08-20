@@ -134,6 +134,14 @@ def weekly_points(
     }
 
 
+#: The annualized playoff term may pull a player's draft value at most this
+#: many season-scale points away from their season VORP (before the ``weight``
+#: dial scales it down further). Two-to-three playoff weeks annualized ×5 is
+#: single-season matchup noise amplified — uncapped it could swing a player
+#: across whole tiers on the strength of one soft week-16 opponent.
+PLAYOFF_SWING_CAP = 40.0
+
+
 def blend_value(
     season_vorp: float,
     playoff_vorp: float,
@@ -141,17 +149,23 @@ def blend_value(
     weight: float,
     n_playoff_weeks: int,
     n_season_weeks: int,
+    swing_cap: float = PLAYOFF_SWING_CAP,
 ) -> float:
-    """``(1−w)·season_VORP + w·annualized playoff VORP`` — the draft value.
+    """``season_VORP + w·clamp(annualized playoff VORP − season_VORP)``.
 
     The playoff VORP is annualized (× season weeks / playoff weeks) so the two
     terms share a scale and the blend is monotonic in ``weight``: turning the
-    dial up always moves a player toward their playoff-week strength.
+    dial up always moves a player toward their playoff-week strength. The
+    annualized deviation is capped at ``±swing_cap`` season-points so
+    single-season schedule noise can nudge the ranking but never rewrite a
+    tier (algebraically identical to the plain ``(1−w)·s + w·a`` blend inside
+    the cap).
     """
     if n_playoff_weeks <= 0:
         return season_vorp
     annualized = playoff_vorp * (n_season_weeks / n_playoff_weeks)
-    return (1.0 - weight) * season_vorp + weight * annualized
+    delta = max(-swing_cap, min(swing_cap, annualized - season_vorp))
+    return season_vorp + weight * delta
 
 
 def sos_blend(season_vorp: float, sos_vorp: float, *, weight: float) -> float:

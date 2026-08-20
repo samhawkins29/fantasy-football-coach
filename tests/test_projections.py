@@ -377,8 +377,19 @@ def test_new_schema_columns_are_understood(tmp_path):
 # -- source selection (free vs paid) ------------------------------------------
 
 
-def test_factory_defaults_to_free_nflverse():
+def test_factory_defaults_to_free_consensus_blend():
+    # Still free and keyless — the default is the model anchored by market ADP.
+    from fantasy_coach.ingest.consensus import ConsensusProjectionSource
+
     config = Config.load(environ={})
+    src = make_projection_source(config)
+    assert isinstance(src, ConsensusProjectionSource)
+    assert isinstance(src.model, NflverseProjectionSource)
+    assert src.cache_dir == Path(".cache")
+
+
+def test_factory_nflverse_selects_raw_model():
+    config = Config.load(environ={"PROJECTION_SOURCE": "nflverse"})
     src = make_projection_source(config)
     assert isinstance(src, NflverseProjectionSource)
     assert src.cache_dir == Path(".cache")
@@ -396,7 +407,12 @@ def test_factory_respects_env_selection_and_cache_dir(tmp_path):
     assert isinstance(src, FantasyProsSource)
     assert src.api_key == "key-123"
 
-    config_free = Config.load(environ={"FANTASY_COACH_CACHE_DIR": str(tmp_path)})
+    config_free = Config.load(
+        environ={
+            "PROJECTION_SOURCE": "nflverse",
+            "FANTASY_COACH_CACHE_DIR": str(tmp_path),
+        }
+    )
     free = make_projection_source(config_free)
     assert isinstance(free, NflverseProjectionSource)
     assert free.cache_dir == tmp_path

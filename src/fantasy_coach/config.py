@@ -28,7 +28,12 @@ DEFAULT_TOKEN_PATH = ".tokens.json"
 # additional_authorization_required from Fantasy. Empty here means "omit the
 # scope parameter entirely" (see YahooOAuthClient.create_authorization_url).
 DEFAULT_SCOPE = ""
-DEFAULT_PROJECTION_SOURCE = "nflverse"  # free, no key (framework §2.5 free-first)
+# The DEFAULT projection source is the consensus blend (still free, no key):
+# the nflverse history model anchored by the market's ADP wisdom. History-only
+# projections rank proven-volume players absurdly high and breakout/young
+# players absurdly low (the audit's Jayden Daniels case); the market corrects
+# that. Set PROJECTION_SOURCE=nflverse for the raw model.
+DEFAULT_PROJECTION_SOURCE = "consensus"
 DEFAULT_LEAGUE_FILE = "data/league.json"
 DEFAULT_CACHE_DIR = ".cache"
 DEFAULT_DB_PATH = "data/coach.sqlite3"  # single-file SQLite store (git-ignored)
@@ -56,14 +61,16 @@ class Config:
         odds_api_key: Optional key for The Odds API (later modules).
         fantasypros_api_key: Optional FantasyPros API key (later modules).
         projection_source: Which ProjectionSource the value engine uses —
-            ``"nflverse"`` (free, default), ``"consensus"`` (blends the
-            nflverse model with market-implied ADP points — enhancement 1,
-            off unless selected), or ``"fantasypros"`` (needs the key).
+            ``"consensus"`` (free, DEFAULT — blends the nflverse model with
+            market-implied ADP points so history-only bias is corrected),
+            ``"nflverse"`` (the raw history model), or ``"fantasypros"``
+            (needs the key).
         consensus_model_weight: Blend weight for the nflverse model when
-            ``PROJECTION_SOURCE=consensus`` (default 0.7). Renormalized over
+            ``PROJECTION_SOURCE=consensus`` (default 0.6). Renormalized over
             the signals present per player.
         consensus_market_weight: Blend weight for the market/ADP-implied
-            signal in the consensus blend (default 0.3).
+            signal in the consensus blend (default 0.4 — the market is
+            thousands of drafters pricing news the history model can't see).
         playoff_emphasis: The step-5 playoff blend weight ``w`` in
             ``(1−w)·season VORP + w·playoff strength``. ``0.0`` (default)
             keeps the board pure season value — the schedule layer is
@@ -99,8 +106,8 @@ class Config:
     odds_api_key: str = ""
     fantasypros_api_key: str = ""
     projection_source: str = DEFAULT_PROJECTION_SOURCE
-    consensus_model_weight: float = 0.7
-    consensus_market_weight: float = 0.3
+    consensus_model_weight: float = 0.6
+    consensus_market_weight: float = 0.4
     playoff_emphasis: float = 0.0
     injury_emphasis: float = 0.0
     risk_preference: float = 0.0
@@ -155,8 +162,8 @@ class Config:
         injury_emphasis = emphasis("INJURY_EMPHASIS")
         risk_preference = emphasis("RISK_PREFERENCE", lo=-1.0)
         sos_emphasis = emphasis("SOS_EMPHASIS")
-        consensus_model_weight = emphasis("CONSENSUS_MODEL_WEIGHT", 0.7)
-        consensus_market_weight = emphasis("CONSENSUS_MARKET_WEIGHT", 0.3)
+        consensus_model_weight = emphasis("CONSENSUS_MODEL_WEIGHT", 0.6)
+        consensus_market_weight = emphasis("CONSENSUS_MARKET_WEIGHT", 0.4)
 
         return cls(
             yahoo_client_id=environ.get("YAHOO_CLIENT_ID", "").strip(),

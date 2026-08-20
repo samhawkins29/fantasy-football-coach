@@ -20,7 +20,10 @@ is attached — the offline live-draft path):
 
 * ``GET /api/search?q=…[&pos=RB]`` — fuzzy player lookup (available first).
 * ``POST /api/pick`` ``{"player": raw_id, "team_key"?: …, "pick"?: n}`` —
-  mark a pick; ``POST /api/unmark`` ``{"pick": n}``; ``POST /api/undo``;
+  mark a pick; ``POST /api/pick_offboard`` ``{"position", "name"?,
+  "team_key"?, "pick"?}`` — record a pick of a player the store doesn't know
+  (P0-2c safety net: consumes the slot + a roster spot at that position, no
+  stall); ``POST /api/unmark`` ``{"pick": n}``; ``POST /api/undo``;
   ``POST /api/reset``. Each returns ``{ok, message, state}`` with the
   recomputed snapshot so the page never waits for the next poll.
 * ``GET /api/teams`` — round-1 order with names (the team picker).
@@ -129,6 +132,14 @@ class CompanionServer:
                             team_key=str(payload.get("team_key", "") or ""),
                             pick_no=int(pick) if pick not in (None, "") else None,
                         )
+                    elif path == "/api/pick_offboard":
+                        pick = payload.get("pick")
+                        out = manual.mark_unknown(
+                            str(payload.get("position", "")),
+                            name=str(payload.get("name", "") or ""),
+                            team_key=str(payload.get("team_key", "") or ""),
+                            pick_no=int(pick) if pick not in (None, "") else None,
+                        )
                     elif path == "/api/unmark":
                         out = manual.unmark(int(payload["pick"]))
                     elif path == "/api/undo":
@@ -139,9 +150,11 @@ class CompanionServer:
                         lr = payload.get("last_round")
                         cr = payload.get("cost_round")
                         out = manual.add_keeper(
-                            str(payload["team_key"]), str(payload["player"]),
+                            str(payload["team_key"]), str(payload.get("player", "")),
                             last_round=None if lr in (None, "", "undrafted") else int(lr),
                             cost_round=None if cr in (None, "") else int(cr),
+                            off_position=str(payload.get("off_position", "") or ""),
+                            off_name=str(payload.get("off_name", "") or ""),
                         )
                     elif path == "/api/keepers/remove":
                         out = manual.remove_keeper(str(payload["team_key"]), str(payload["player"]))

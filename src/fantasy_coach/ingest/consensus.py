@@ -28,14 +28,22 @@ playoff value, injury shading — without any of them changing.
 **The blend, in full (no hidden steps):**
 
 1. Pull the model's records (cache-served offline, like everything else).
-2. Fit ``points ≈ a + b·ln(adp)`` per position on players that have *both* a
-   model projection and a market ADP (global fit as fallback for thin
-   positions). The fit is the calibration that puts "the market drafts him at
-   pick 12" onto the same points scale as the model.
+2. **Rank-calibrate** the market per position: among players carrying both a
+   model projection and a market ADP, the market's ``k``-th ranked player
+   gets the model's ``k``-th best points at the position — the market's
+   *order* on the model's own points scale. (A least-squares ``ln(adp)``
+   curve — the previous scheme, still the global fallback for thin
+   positions — collapses to flat exactly where the model mis-ranks players,
+   which is the case the market exists to fix.)
 3. Per player, take the **weighted mean of the available signals** in
    reference-scoring points space (framework §4.1: ``Σ w_s·points_s / Σ w_s``),
-   with configurable per-source ``weights``. A player with only one signal
-   keeps that signal untouched — nobody is dropped, nothing is invented.
+   with configurable per-source ``weights`` — plus **disagreement
+   escalation**: the further apart the model and the market rank a player at
+   his position, the more the market's share ramps (base → 85%), because a
+   wild gap means the model is missing real information (an Achilles
+   recovery, a new offense, a sophomore leap old box scores can't see). A
+   player with only one signal keeps that signal untouched — nobody is
+   dropped, nothing is invented.
 4. Scale the model's component stat line by ``blended / model_points`` so the
    league rescoring path (M4 rescores ``stats``, never trusts ``points``)
    actually *sees* the consensus. ``games`` is left alone — the blend moves
@@ -49,9 +57,11 @@ leagues and would relabel market guesses as projections. Single-signal rule,
 honestly applied: model-only → model record; market-only → the board's ADP
 path, exactly as before.
 
-**Off-by-default:** nothing selects this class unless ``PROJECTION_SOURCE=
-consensus`` is set (see :func:`~fantasy_coach.ingest.projections.make_projection_source`);
-the default remains the single nflverse model, bit-for-bit.
+**On by default:** the consensus blend IS the default projection source (see
+:data:`~fantasy_coach.config.DEFAULT_PROJECTION_SOURCE`) — the audit showed the
+history-only model ranks market-obvious stars absurdly low (a breakout QB at
+board #1000) because past volume is all it can see. Set
+``PROJECTION_SOURCE=nflverse`` for the raw model.
 
 **Caching / degradation:** the blended records cache to JSON per season like
 the model's own cache — :meth:`warm_cache` pre-draft, zero network on draft
@@ -96,14 +106,24 @@ CONSENSUS_NOTE = (
 #: line and our own math); the market corrects it where thousands of drafters
 #: disagree. Tuned by hand for a first prior — the §4.5 calibration loop is
 #: what should learn these eventually.
-DEFAULT_BLEND_WEIGHTS: dict[str, float] = {"model": 0.7, "market": 0.3}
+DEFAULT_BLEND_WEIGHTS: dict[str, float] = {"model": 0.6, "market": 0.4}
 
 #: Weight for an extra (plugged-in) source with no explicit ``weights`` entry.
 DEFAULT_EXTRA_WEIGHT = 0.5
 
-#: A position needs this many (model, ADP) pairs for its own calibration
-#: curve; thinner positions fall back to the global fit.
+#: A position needs this many (model, ADP) pairs for its own rank
+#: calibration; thinner positions fall back to the global log-curve fit.
 _MIN_POSITION_FIT_PAIRS = 3
+
+#: The ceiling on the market's effective blend share when the model and the
+#: market wildly disagree about a player. The model never goes fully silent —
+#: 15% survives even for its most confused calls.
+MAX_MARKET_SHARE = 0.85
+
+#: How fast disagreement escalates the market's share: a model-vs-ADP rank
+#: gap of this fraction of the position's priced pool (30%) is "wild" —
+#: the share has fully ramped from its base to :data:`MAX_MARKET_SHARE`.
+DISAGREEMENT_SCALE = 0.3
 
 
 def market_adp_from_players(players: Iterable[CanonicalPlayer]) -> dict[str, float]:
@@ -281,6 +301,57 @@ class ConsensusProjectionSource:
         default = DEFAULT_BLEND_WEIGHTS.get(signal, DEFAULT_EXTRA_WEIGHT)
         return float(self.weights.get(signal, default))
 
+    def _calibrate_market(
+        self, model_records: Sequence[ProjectionRecord], market: Mapping[str, float]
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """``(market_points, disagreement)`` per player id with both signals.
+
+        **Rank calibration** per position (≥ :data:`_MIN_POSITION_FIT_PAIRS`
+        priced players): the market's ``k``-th ranked player at the position
+        gets the model's ``k``-th best points there — the market's *order*
+        expressed on the model's own points scale. A least-squares curve
+        can't do this job: model points and ADP are nearly uncorrelated at
+        positions the model mis-ranks (the exact case the market must fix),
+        so a fitted slope collapses toward flat and the correction vanishes.
+        Thinner positions fall back to the global log fit.
+
+        ``disagreement`` is the model-vs-market rank gap as a fraction of the
+        position's priced pool — the "how lost is the model on this player"
+        signal that escalates the market's blend share.
+        """
+        market_points: dict[str, float] = {}
+        disagreement: dict[str, float] = {}
+        pairs_by_pos: dict[str, list[tuple[str, float, float]]] = {}
+        all_pairs: list[tuple[float, float]] = []
+        for rec in model_records:
+            adp = market.get(rec.source_id)
+            if adp is None:
+                continue
+            pairs_by_pos.setdefault(rec.position, []).append(
+                (rec.source_id, adp, rec.points)
+            )
+            all_pairs.append((adp, rec.points))
+        global_curve = self.curve_fitter(all_pairs) if all_pairs else None
+        for pos, triples in pairs_by_pos.items():
+            if len(triples) >= _MIN_POSITION_FIT_PAIRS:
+                by_adp = sorted(triples, key=lambda t: t[1])
+                pts_desc = sorted((t[2] for t in triples), reverse=True)
+                model_rank = {
+                    pid: i
+                    for i, (pid, _, _) in enumerate(
+                        sorted(triples, key=lambda t: -t[2])
+                    )
+                }
+                n = len(triples)
+                for k, (pid, _adp, _pts) in enumerate(by_adp):
+                    market_points[pid] = pts_desc[k]
+                    disagreement[pid] = abs(k - model_rank[pid]) / n
+            elif global_curve is not None:
+                for pid, adp, _pts in triples:
+                    market_points[pid] = global_curve(adp)
+                    disagreement[pid] = 0.0
+        return market_points, disagreement
+
     def _compute(self, season: int) -> list[ProjectionRecord]:
         """Blend the model with whatever other signals are actually present."""
         model_records = self.model.project(season=season)
@@ -291,28 +362,11 @@ class ConsensusProjectionSource:
             )
         extras = self._extra_points(season)
 
-        # Calibrate ADP → points per position on players with both signals.
-        curves: dict[str, Callable[[float], float]] = {}
+        market_points: dict[str, float] = {}
+        disagreement: dict[str, float] = {}
         if market:
-            pairs_by_pos: dict[str, list[tuple[float, float]]] = {}
-            all_pairs: list[tuple[float, float]] = []
-            for rec in model_records:
-                adp = market.get(rec.source_id)
-                if adp is None:
-                    continue
-                pairs_by_pos.setdefault(rec.position, []).append((adp, rec.points))
-                all_pairs.append((adp, rec.points))
-            global_curve = self.curve_fitter(all_pairs) if all_pairs else None
-            for pos, pairs in pairs_by_pos.items():
-                curve = (
-                    self.curve_fitter(pairs)
-                    if len(pairs) >= _MIN_POSITION_FIT_PAIRS
-                    else None
-                )
-                curve = curve or global_curve
-                if curve is not None:
-                    curves[pos] = curve
-            if not curves:
+            market_points, disagreement = self._calibrate_market(model_records, market)
+            if not market_points:
                 logger.warning(
                     "consensus: could not calibrate ADP→points (too few overlapping "
                     "players) — blend degrades to the model alone"
@@ -321,26 +375,40 @@ class ConsensusProjectionSource:
         records: list[ProjectionRecord] = []
         for rec in model_records:
             signals: dict[str, float] = {"model": rec.points}
-            # The market signal needs a calibration curve for the player's
-            # position and a positive model total to scale the stat line by;
-            # very-low-value players just keep the model's word.
-            adp = market.get(rec.source_id)
-            curve = curves.get(rec.position)
-            if adp is not None and curve is not None and rec.points > 0:
-                signals["market"] = curve(adp)
+            # The market signal needs a calibration for the player and a
+            # positive model total to scale the stat line by; very-low-value
+            # players just keep the model's word.
+            if rec.source_id in market_points and rec.points > 0:
+                signals["market"] = market_points[rec.source_id]
             for source_name, keyed in extras.items():
                 pts = keyed.get(rec.source_id)
                 if pts is not None and rec.points > 0:
                     signals[source_name] = pts
 
-            total_weight = sum(self._weight_for(s) for s in signals)
+            weights = {s: self._weight_for(s) for s in signals}
+            # Disagreement escalation: when the model and the market rank a
+            # player far apart, the model is probably missing information
+            # (recovery timetable, new offense, a breakout it can't see in
+            # old box scores) — the market's share ramps from its base
+            # toward MAX_MARKET_SHARE with the rank gap.
+            if "market" in signals and weights.get("model", 0.0) > 0:
+                w_model, w_market = weights["model"], weights["market"]
+                base_share = w_market / (w_model + w_market)
+                d = disagreement.get(rec.source_id, 0.0)
+                share = base_share + (MAX_MARKET_SHARE - base_share) * min(
+                    1.0, d / DISAGREEMENT_SCALE
+                )
+                share = min(share, MAX_MARKET_SHARE)
+                if share < 1.0 and share > base_share:
+                    weights["market"] = w_model * share / (1.0 - share)
+
+            total_weight = sum(weights.values())
             if len(signals) == 1 or total_weight <= 0:
                 blended = rec.points
                 inputs = ("model",)
             else:
                 blended = (
-                    sum(self._weight_for(s) * v for s, v in signals.items())
-                    / total_weight
+                    sum(weights[s] * v for s, v in signals.items()) / total_weight
                 )
                 inputs = tuple(signals)
 

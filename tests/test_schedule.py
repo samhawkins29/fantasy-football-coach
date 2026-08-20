@@ -97,28 +97,47 @@ def test_non_regular_season_games_are_ignored(tmp_path):
 
 def test_multiplier_direction_more_points_allowed_reads_easier(tmp_path):
     # DEN allowed 110 rush yds (11 pts), LV allowed 90 (9 pts) in their one
-    # game -> mean 10 -> DEN 1.1 (easier), LV 0.9 (harder). Hand-computable.
+    # game -> mean 10 -> raw ratios 1.1 / 0.9, shrunk toward neutral by the
+    # default k=0.35 (one season of defense data is noise, not truth):
+    # DEN 1 + 0.35x0.1 = 1.035 (easier), LV 0.965 (harder). Hand-computable.
     weekly = [
         weekly_row("RB", "DEN", week=1, rushing_yards=110.0),
         weekly_row("RB", "LV", week=1, rushing_yards=90.0),
     ]
     schedule = make_source([], weekly, tmp_path).warm_cache(2026)
-    assert schedule.multiplier("RB", "DEN") == pytest.approx(1.1)
-    assert schedule.multiplier("RB", "LV") == pytest.approx(0.9)
+    assert schedule.multiplier("RB", "DEN") == pytest.approx(1.035)
+    assert schedule.multiplier("RB", "LV") == pytest.approx(0.965)
     assert schedule.multiplier("RB", "SEA") == 1.0    # unseen defense: neutral
     assert schedule.multiplier("WR", "DEN") == 1.0    # unseen position: neutral
     assert schedule.sos_seasons == [2025]
 
 
-def test_multiplier_is_per_game_and_clamped(tmp_path):
+def test_multiplier_is_per_game_and_shrunk(tmp_path):
     # DEN bleeds 300 rush yds across 2 games (15/game), LV 50 in 1 game (5).
-    # Mean 10 -> raw 1.5 / 0.5, clamped to the default 1.25 / 0.75.
+    # Mean 10 -> raw 1.5 / 0.5, shrunk (k=0.35) to 1.175 / 0.825 — inside the
+    # clamp, which stays as a backstop for absurd inputs.
     weekly = [
         weekly_row("RB", "DEN", week=1, rushing_yards=180.0),
         weekly_row("RB", "DEN", week=2, rushing_yards=120.0),
         weekly_row("RB", "LV", week=1, rushing_yards=50.0),
     ]
     schedule = make_source([], weekly, tmp_path).warm_cache(2026)
+    assert schedule.multiplier("RB", "DEN") == pytest.approx(1.175)
+    assert schedule.multiplier("RB", "LV") == pytest.approx(0.825)
+
+
+def test_multiplier_clamp_backstops_extreme_shrunk_ratios(tmp_path):
+    # A grotesque outlier (raw ratio ~1.9+) still cannot exceed the clamp
+    # even after shrinking: shrink first, clamp second.
+    from fantasy_coach.ingest.schedule import ScheduleSource
+
+    weekly = [
+        weekly_row("RB", "DEN", week=1, rushing_yards=1000.0),
+        weekly_row("RB", "LV", week=1, rushing_yards=10.0),
+    ]
+    source = make_source([], weekly, tmp_path)
+    source.shrink = 1.0  # no shrink: raw ratios ~1.98 / 0.02 hit the clamp
+    schedule = source.warm_cache(2026)
     assert schedule.multiplier("RB", "DEN") == 1.25
     assert schedule.multiplier("RB", "LV") == 0.75
 

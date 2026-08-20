@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fantasy_coach.draft.recommend import (
+    DEPTH_WEIGHTS,
     NEED_DEPTH,
     NEED_FLEX,
     NEED_STARTER,
@@ -91,7 +92,7 @@ def test_needs_open_starter_flex_depth_progression(slots):
     assign_roster(slots, [{"position": "RB"}])   # third RB takes the flex
     needs = compute_needs(slots)
     assert needs.tag("RB") == NEED_DEPTH
-    assert needs.weight("RB") == NEED_WEIGHTS[NEED_DEPTH]
+    assert needs.weight("RB") == DEPTH_WEIGHTS["RB"]  # position-aware depth
     assert needs.tag("WR") == NEED_STARTER       # unaffected position
 
 
@@ -99,7 +100,7 @@ def test_needs_open_starter_flex_depth_progression(slots):
 
 
 def test_rank_weighting_prefers_open_slot_over_filled_position(slots):
-    # RB starters + flex all filled: a 40-VORP RB (depth .55 -> 22) must fall
+    # RB starters + flex all filled: a 40-VORP RB (RB depth .6 -> 24) must fall
     # behind a 30-VORP WR filling an open starter slot (30).
     assign_roster(slots, [{"position": "RB"}] * 3)
     needs = compute_needs(slots)
@@ -112,7 +113,7 @@ def test_rank_weighting_prefers_open_slot_over_filled_position(slots):
     )
     assert [rp.entry.canonical_id for rp in ranked] == ["WRX", "RBX"]
     assert ranked[0].score == 30.0
-    assert ranked[1].score == pytest.approx(22.0)
+    assert ranked[1].score == pytest.approx(24.0)  # 40 × DEPTH_WEIGHTS["RB"]
     assert ranked[1].need == NEED_DEPTH
 
 

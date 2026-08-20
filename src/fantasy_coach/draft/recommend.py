@@ -68,6 +68,9 @@ __all__ = [
     "NEED_FLEX",
     "NEED_DEPTH",
     "NEED_WEIGHTS",
+    "DEPTH_WEIGHTS",
+    "STREAM_WAIT_WEIGHT",
+    "need_weight",
     "SlotInstance",
     "roster_slots",
     "assign_roster",
@@ -100,6 +103,37 @@ NEED_WEIGHTS: dict[str, float] = {
     NEED_FLEX: 0.85,
     NEED_DEPTH: 0.55,
 }
+
+#: Position-aware depth weights (once the position's starters are set): bench
+#: RB/WR win weeks (injuries + byes make them near-starters), a backup TE is
+#: worth little, a backup QB in a 1-QB league less, and a second IDP/DEF/K is
+#: a wasted roster spot in a streaming league. Positions not listed use
+#: ``NEED_WEIGHTS["depth"]``.
+DEPTH_WEIGHTS: dict[str, float] = {
+    "RB": 0.6,
+    "WR": 0.6,
+    "TE": 0.3,
+    "QB": 0.2,
+    "DL": 0.05,
+    "LB": 0.05,
+    "DB": 0.05,
+    "DEF": 0.05,
+    "K": 0.05,
+}
+
+#: The need weight a *streamable* open slot (IDP/DEF/K) carries while there is
+#: no urgency to fill it — a sharp drafter takes these in the last rounds, so
+#: an open DEF slot must not compete with RB/WR value at full starter weight
+#: from pick 1. Rises toward the full need weight as urgency → 1 (see
+#: ``rank_available``'s ``stream_urgency``).
+STREAM_WAIT_WEIGHT = 0.3
+
+
+def need_weight(tag: str, position: str) -> float:
+    """The score multiplier for ``tag`` at ``position`` (depth is position-aware)."""
+    if tag == NEED_DEPTH:
+        return DEPTH_WEIGHTS.get(position, NEED_WEIGHTS[NEED_DEPTH])
+    return NEED_WEIGHTS[tag]
 
 #: Bye-stacking nudge: sharing a bye with this many of your starters is free
 #: (one collision is unavoidable roster math)…
@@ -227,7 +261,7 @@ class RosterNeeds:
 
     def weight(self, position: str) -> float:
         """The score multiplier for a positive VORP at ``position``."""
-        return NEED_WEIGHTS[self.tag(position)]
+        return need_weight(self.tag(position), position)
 
 
 def compute_needs(slots: Sequence[SlotInstance]) -> RosterNeeds:
@@ -329,6 +363,7 @@ def rank_available(
     *,
     starter_bye_counts: Mapping[int, int] | None = None,
     survival: Mapping[str, Survival] | None = None,
+    stream_urgency: Mapping[str, float] | None = None,
 ) -> list[RankedPlayer]:
     """Re-rank the available board by need-weighted score.
 
@@ -346,13 +381,25 @@ def rank_available(
 
     ``survival`` (upgrade 2) attaches each player's availability estimate for
     the page and the recommendation's lookahead; it never changes the order.
+
+    ``stream_urgency`` maps a *streamable* position (IDP groups / DEF / K) to
+    an urgency in ``[0, 1]``: at 0 an open slot there carries only
+    :data:`STREAM_WAIT_WEIGHT` (take it late, like a sharp drafter), rising
+    linearly to the full need weight at 1 (endgame, or remaining startable
+    supply approaching remaining demand). Positions absent from the map keep
+    their normal weight.
     """
     bye_counts = starter_bye_counts or {}
     surv = survival or {}
+    urgency_map = stream_urgency or {}
     ranked: list[RankedPlayer] = []
     for entry in board.entries:
         need = needs.tag(entry.position)
-        weight = NEED_WEIGHTS[need]
+        weight = need_weight(need, entry.position)
+        if need != NEED_DEPTH and entry.position in urgency_map:
+            urgency = max(0.0, min(1.0, urgency_map[entry.position]))
+            wait = min(STREAM_WAIT_WEIGHT, weight)
+            weight = round(wait + urgency * (weight - wait), 3)
         value = entry.rank_value
         score = value * weight if value > 0 else value
         overlap = bye_counts.get(entry.bye_week, 0) if entry.bye_week else 0

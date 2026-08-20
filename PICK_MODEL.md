@@ -1,10 +1,12 @@
 # How the Coach picks a player — the full formula
 
 This is the audit target: every number that goes into "BEST PICK NOW", in the
-order the code computes it, with the module that owns each step. Every dial
-defaults to **0 = off**, and with all dials off the pick is *need-weighted
-season VORP* exactly as certified in M4/M5. Nothing below is hidden; each
-step is a labelled model estimate.
+order the code computes it, with the module that owns each step. The
+*optional* dials (playoff, SOS, risk, soft-injury) default to **0 = off**;
+three things are structural and always on, because they are correctness, not
+preference: remaining-demand baselines (step 2), the streaming treatment of
+IDP/DEF/K (steps 2 and 7), and the hard-status availability haircut (step
+6). Nothing below is hidden; each step is a labelled model estimate.
 
 Notation: one league (`LeagueSettings`), `T` teams, the **available pool** =
 every player not kept and not yet drafted (recomputed on every poll).
@@ -13,11 +15,12 @@ every player not kept and not yet drafted (recomputed on every poll).
 
 | Input | Source | Module |
 |---|---|---|
-| Season stat-line projections (QB/RB/WR/TE + IDP DL/LB/DB) | nflverse weekly history, recency-weighted per-game rates regressed to positional priors | `ingest/projections.py` |
+| Season stat-line projections (QB/RB/WR/TE + IDP DL/LB/DB) | **Consensus (default)**: the nflverse history model rank-calibrated against market ADP per position, market share 0.4 escalating to 0.85 where model and market wildly disagree | `ingest/projections.py`, `ingest/consensus.py` |
+| Player universe (rookies, team DEFs, current teams, yahoo ids) | Sleeper `players/nfl` catalog (free, keyless), merged into the store | `ingest/catalog.py` |
 | Floor / ceiling (~20th/80th pct) | week-to-week scoring variance shrunk to positional priors + role/sample uncertainty; consensus widens for source disagreement | `ingest/variance.py`, `ingest/consensus.py` |
-| Schedule + per-position opponent multipliers | nflverse schedules + prior-season points allowed per position, clamped 0.75–1.25 | `ingest/schedule.py` |
+| Schedule + per-position opponent multipliers | nflverse schedules + prior-season points allowed per position, **shrunk ~⅓ toward neutral** (one season of defense data is noise) then clamped 0.75–1.25 | `ingest/schedule.py` |
 | Injury status + durability | Sleeper/Yahoo status, nflverse games-missed history | `ingest/injury.py`, `value/injury.py` |
-| ADP (survival) | Yahoo `draft_analysis` when available; else board rank fallback | `draft/survival.py` |
+| ADP (market value + survival) | FantasyFootballCalculator PPR/league-size mocks (free, keyless, with stdev) — source `ffc`; Yahoo `draft_analysis` when available; else board rank fallback | `ingest/adp.py`, `draft/survival.py` |
 | League rules, keepers, draft picks | `data/league.json` → store (`league_settings`, `keepers`, `draft_picks`) | `league.py`, `store/` |
 
 ## 1. League points  (`value/scoring.py`, `value/board.py` step 1)
@@ -39,8 +42,21 @@ slot accepts (K in this league) are dropped from the board.
 
 `VORP = points − baseline[position]`
 
-Because the pool is the *available* pool, keepers and made picks move the
-baselines every poll (fewer RBs left → RB replacement slides down).
+Live, the demand is the league's **remaining** demand: every team's
+still-unfilled slots (keepers and made picks pre-consume theirs), summed
+across the room — so the pool and the demand shrink *together* and
+replacement level stays "the best player nobody will start from here on"
+instead of drifting down the drained pool (the P0-1 fix; cross-position
+comparisons stay valid from pick 1 of a keeper draft).
+
+**Streaming positions** (IDP DL/LB/DB, DEF, K): the baseline is raised to
+`max(demand baseline, mean of the players ranked T…2.5T)` — what streaming
+the position actually yields — and the residual is compressed ×0.5, because
+season-total IDP projections are mostly tackle-volume noise and a weekly
+streamer captures much of the projected gap. Rookies and DEFs without a
+projection enter through the ADP→VORP curve (market-derived value); K/DEF
+with no ADP at all floor *below* the worst market-priced peer.
+
 Tiers cluster season VORP by gap size; a tier's last available player is a
 **cliff**.
 
@@ -59,7 +75,7 @@ opponent's position-specific multiplier:
 * `sos_vorp = Σ_w weekly_w − baseline` (every week through its own matchup)
 * `playoff_vorp = Σ_{w∈{15,16,17}} weekly_w − baseline × 3/16`
 * `season_component = (1 − s)·VORP + s·sos_vorp`   — dial **s = SOS_EMPHASIS**
-* `draft_value = (1 − w)·season_component + w·(playoff_vorp × 16/3)` — dial **w = PLAYOFF_EMPHASIS** (annualized so both terms share a scale; the playoff weeks are therefore weighted more heavily on top of the per-week adjustment)
+* `draft_value = season_component + w·clamp(playoff_vorp × 16/3 − season_component, ±40)` — dial **w = PLAYOFF_EMPHASIS** (annualized so both terms share a scale; the ±40-point swing cap stops three matchup weeks from rewriting a tier). Streaming positions skip the blend — a streamer picks their own matchups.
 
 `sos_score` (display) = mean weekly multiplier with playoff weeks counted 2×.
 
@@ -68,11 +84,15 @@ opponent's position-specific multiplier:
 `draft_value += r·(ceiling_vorp − VORP)` if `r > 0`, else `draft_value −= |r|·(VORP − floor_vorp)`.
 `r = 0` leaves the median. Only draft value moves — VORP and tiers never do.
 
-## 6. Injury / durability  (board step 7, dial **INJURY_EMPHASIS**)
+## 6. Injury / durability  (board step 7)
 
-`draft_value ×= (1 − injury_weight × discount)` where `discount` is the
-documented, clamped combination of current status (O/IR/Q…) and durability
-history. Flags always show; shading only with the dial on.
+Two layers. **Always on** (P0-5): a hard designation costs expected games
+whatever the dials say — `draft_value ×= (1 − haircut)` with documented
+haircuts (O 0.25, SUS 0.20, NA 0.35, PUP/NFI 0.45, IR 0.55; a reserve-list
+stint with a season-ending detail — Achilles/ACL/patellar — caps at 0.90,
+i.e. near-zero value). **Dial-gated** (`INJURY_EMPHASIS`): soft risk only —
+Questionable/Doubtful and durability history shade value by
+`injury_weight × discount`. Flags always show.
 
 `rank_value = draft_value` (or `VORP` when no schedule/dials) — the board's
 overall order.
@@ -83,9 +103,16 @@ For **your** roster (keepers + picks assigned to slots):
 
 `score = rank_value × need_weight` for positive values, where
 `need_weight = 1.00` (an open dedicated starter at the position) / `0.85`
-(only an open flex fits it) / `0.55` (starters set — depth). Negative values
-are never inflated. A player whose bye is already shared by more than one of
-your starters loses `4 %` per extra collision (max 12 %).
+(only an open flex fits it) / **position-aware depth** once starters are set
+(RB/WR 0.6, TE 0.3, QB 0.2, IDP/DEF/K 0.05 — bench RBs win weeks, a second
+DEF is a wasted spot). For **streamable** open slots (IDP/DEF/K) the weight
+starts at 0.3 and ramps to the full need weight only as urgency rises: when
+my spare picks beyond my open starters run out (ramp over the last ~5), or
+when the remaining startable supply at the position approaches the league's
+remaining demand — so the tool takes its one IDP and one DEF late, like a
+sharp drafter, unless a run forces its hand. Negative values are never
+inflated. A player whose bye is already shared by more than one of your
+starters loses `4 %` per extra collision (max 12 %).
 
 Players are ranked by `score` (ties → VORP). This ranking is the "Top
 available" table.
@@ -150,4 +177,7 @@ consume the same keeper triples and roster machinery as the live loop.
 
 `PLAYOFF_EMPHASIS` (w) · `SOS_EMPHASIS` (s) · `RISK_PREFERENCE` (r) ·
 `INJURY_EMPHASIS` — env or `draft --playoff-weight/--sos-weight/--risk/--injury-weight`.
-Suggested for this league: `w 0.3, s 0.3–0.5, r 0…+0.3`.
+Suggested for this league: `w 0.15–0.25, s 0.2–0.35, r 0…+0.3` (lowered
+after the SOS shrink + playoff cap — the schedule layer is a nudge by
+construction now). The hard-status availability haircut is NOT a dial: it
+always applies.

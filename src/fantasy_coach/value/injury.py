@@ -6,13 +6,19 @@ step-5 split (schedule data in ingest, schedule math here). Everything is a
 values and ordering are bit-identical to the pre-step-6 board — flags and
 notes still appear (visibility is free), only the *ranking* is gated.
 
-The model, in full (no hidden steps — every output is a model estimate):
+**Two layers** (P0-5 split): hard designations (O/SUS/PUP/NFI/IR) carry an
+**always-on availability haircut** (:func:`availability_haircut`) — missing
+games is a fact of the designation, not a risk preference, so it applies to
+draft value regardless of the dial, and a reserve-list stint with a
+season-ending detail (Achilles/ACL/patellar) caps the value near zero. The
+**dial** below covers only soft risk: day-to-day designations and durability
+history.
 
-1. **Status discount** (:data:`STATUS_DISCOUNTS`): each current designation
-   maps to a documented availability haircut — Out ≫ Doubtful ≫ Questionable ≫
-   healthy. These are draft-context fractions of season value, not weekly
-   availability: an August IR stint costs real weeks but rarely the season, so
-   even IR is a half, never a zeroing.
+The dial model, in full (no hidden steps — every output is a model estimate):
+
+1. **Status discount** (:data:`STATUS_DISCOUNTS`): Questionable/Doubtful map
+   to small documented haircuts — most Questionables play, so whether they
+   shade value at all is the founder's choice via the dial.
 2. **Durability discount**: the clamped games-missed signal from
    :class:`~fantasy_coach.ingest.injury.DurabilityProfile` (already ≤ 0.15).
 3. **Playoff tie-in** (step 5 → step 6): an injury-prone player is a bigger
@@ -45,30 +51,59 @@ from fantasy_coach.ingest.injury import (
 
 __all__ = [
     "STATUS_DISCOUNTS",
+    "AVAILABILITY_HAIRCUTS",
+    "SEASON_ENDING_DETAILS",
+    "SEASON_ENDING_HAIRCUT",
     "PLAYOFF_RISK_FACTOR",
     "TOTAL_DISCOUNT_CAP",
     "PlayerRisk",
     "build_risk_index",
+    "availability_haircut",
     "total_discount",
     "injury_multiplier",
     "injury_note",
 ]
 
-#: Draft-context availability haircut per normalized status code — the
-#: fraction of a player's positive value shaded at full injury weight.
-#: Documented model estimates, ordered with severity: a designation we can't
-#: read (not listed) discounts nothing.
+#: Soft-risk discount per normalized status code — the fraction of a player's
+#: positive value shaded at full injury weight (the **dial-gated** layer:
+#: day-to-day designations say little about the season, so whether they shade
+#: value at all is the founder's choice). Hard designations live in
+#: :data:`AVAILABILITY_HAIRCUTS` instead — they are applied regardless of the
+#: dial. A designation we can't read (not listed) discounts nothing.
 STATUS_DISCOUNTS: dict[str, float] = {
     STATUS_HEALTHY: 0.0,
     "Q": 0.05,  # mild haircut — most Questionables play
     "D": 0.15,
-    "SUS": 0.20,  # suspension length unknown; often multi-week
-    "O": 0.30,
-    "NA": 0.35,
-    "PUP": 0.40,  # reserve lists: out ≥4 weeks by rule, return uncertain
-    "NFI": 0.40,
-    "IR": 0.50,
 }
+
+#: Draft-time **expected-games availability haircut** per hard designation —
+#: applied to draft value REGARDLESS of the injury dial (P0-5). Unlike the
+#: soft dial, these designations carry factual availability costs: a PUP/NFI
+#: stint is ≥4 missed weeks by rule, an August IR usually costs half a season.
+#: Documented model estimates of the season-value fraction lost.
+AVAILABILITY_HAIRCUTS: dict[str, float] = {
+    "SUS": 0.20,  # suspension length unknown; often multi-week
+    "O": 0.25,
+    "NA": 0.35,
+    "PUP": 0.45,  # reserve lists: out ≥4 weeks by rule, return uncertain
+    "NFI": 0.45,
+    "IR": 0.55,
+}
+
+#: Injury details that, combined with a reserve-list designation, read
+#: season-ending (or season-wrecking) at draft time — an August PUP with a
+#: torn Achilles is not a "miss a month" stint. Matched case-insensitively as
+#: substrings of the report detail.
+SEASON_ENDING_DETAILS: tuple[str, ...] = ("achilles", "acl", "patellar")
+
+#: The haircut for a reserve-list designation with a season-ending detail —
+#: near zero, not zero: a late-season return or a cheap stash keeps a sliver
+#: of draft value at the very end of the board.
+SEASON_ENDING_HAIRCUT = 0.9
+
+#: Designations that put a player on a reserve list (out for weeks by rule) —
+#: the ones a season-ending detail escalates.
+_RESERVE_STATUSES = frozenset({"PUP", "NFI", "IR", "O"})
 
 #: How much the playoff dial amplifies the durability term: at playoff weight
 #: ``w`` the durability discount is scaled by ``1 + w × this``. A nudge on a
@@ -131,6 +166,25 @@ def build_risk_index(
         else:
             index[cid] = PlayerRisk(durability=profile)
     return index
+
+
+def availability_haircut(risk: PlayerRisk) -> float:
+    """The always-on expected-games haircut for a hard designation (P0-5).
+
+    ``0.0`` for healthy / day-to-day players (their soft risk is the dial's
+    business). A reserve-list designation whose detail reads season-ending
+    (:data:`SEASON_ENDING_DETAILS` — Achilles, ACL, patellar) escalates to
+    :data:`SEASON_ENDING_HAIRCUT`.
+    """
+    haircut = AVAILABILITY_HAIRCUTS.get(risk.status, 0.0)
+    if haircut <= 0.0:
+        return 0.0
+    detail = (risk.report.detail if risk.report is not None else "").lower()
+    if risk.status in _RESERVE_STATUSES and any(
+        key in detail for key in SEASON_ENDING_DETAILS
+    ):
+        return SEASON_ENDING_HAIRCUT
+    return haircut
 
 
 def total_discount(risk: PlayerRisk, *, playoff_weight: float = 0.0) -> float:

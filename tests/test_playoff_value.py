@@ -166,8 +166,9 @@ def test_board_playoff_value_hand_computed():
     # 320/16 = 20/wk; playoff = 20×1.2×3 = 72; baseline share = 100×3/16 = 18.75.
     assert alpha.playoff_points == pytest.approx(72.0)
     assert alpha.playoff_vorp == pytest.approx(53.25)
-    # Annualized: 53.25 × 16/3 = 284; blend at w=0.5 with VORP 220 → 252.
-    assert alpha.draft_value == pytest.approx(252.0)
+    # Annualized: 53.25 × 16/3 = 284; raw delta +64 capped at +40, so the
+    # w=0.5 blend gives 220 + 0.5×40 = 240 (was 252 uncapped).
+    assert alpha.draft_value == pytest.approx(240.0)
     assert "soft playoff schedule" in alpha.schedule_note
 
 
@@ -207,7 +208,9 @@ def test_blended_value_monotonic_in_emphasis_weight():
         for w in (0.0, 0.25, 0.5, 1.0)
     ]
     assert values == sorted(values)          # strong playoff schedule: rises
-    assert values[0] == pytest.approx(220.0) and values[-1] == pytest.approx(284.0)
+    # w=1 would be 284 uncapped; the ±40 swing cap holds it to 220+40 = 260 —
+    # three matchup weeks may nudge a rank, never rewrite a tier.
+    assert values[0] == pytest.approx(220.0) and values[-1] == pytest.approx(260.0)
     tough = [
         entry(rb_board(schedule=make_schedule(), playoff_weight=w), "Beta Back").draft_value
         for w in (0.0, 0.25, 0.5, 1.0)
@@ -221,10 +224,11 @@ def test_raising_emphasis_reranks_toward_playoff_schedule():
     flat = rb_board(schedule=make_schedule(), playoff_weight=0.0)
     assert [e.name for e in flat.top(3)] == ["Alpha Back", "Beta Back", "Carl Back"]
     tilted = rb_board(schedule=make_schedule(), playoff_weight=0.35)
-    # w=0.35: Beta 220 → 0.65×220 + 0.35×156 = 197.6 — now below neutral Carl.
+    # w=0.35: Beta 220 → 220 + 0.35×max(−40, 156−220) = 220 − 14 = 206 — the
+    # swing cap binds (raw delta −64) and Beta still slips below neutral Carl.
     assert [e.name for e in tilted.top(3)] == ["Alpha Back", "Carl Back", "Beta Back"]
     assert entry(tilted, "Beta Back").overall_rank > entry(flat, "Beta Back").overall_rank
-    assert entry(tilted, "Beta Back").draft_value == pytest.approx(197.6, abs=0.1)
+    assert entry(tilted, "Beta Back").draft_value == pytest.approx(206.0, abs=0.1)
     # VORP itself and the tiers never move with the dial (season truth stays).
     assert entry(tilted, "Beta Back").vorp == entry(flat, "Beta Back").vorp
     assert entry(tilted, "Beta Back").tier == entry(flat, "Beta Back").tier
@@ -351,7 +355,7 @@ def test_store_round_trips_playoff_board_columns(draft_settings):
         store.upsert_league_settings(RB_SETTINGS)
         store.replace_board(RB_SETTINGS.league_key, board)
         rows = {r["name"]: r for r in store.get_board(RB_SETTINGS.league_key)}
-        assert rows["Alpha Back"]["draft_value"] == pytest.approx(252.0)
+        assert rows["Alpha Back"]["draft_value"] == pytest.approx(240.0)  # capped blend
         assert rows["Alpha Back"]["playoff_vorp"] == pytest.approx(53.25)
         assert "soft playoff schedule" in rows["Alpha Back"]["schedule_note"]
         meta = store.board_meta(RB_SETTINGS.league_key)

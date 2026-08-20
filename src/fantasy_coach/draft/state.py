@@ -28,9 +28,42 @@ from dataclasses import dataclass
 from fantasy_coach.clients.models import DraftPick
 from fantasy_coach.ingest.canonical import CanonicalPlayer
 
-__all__ = ["ResolvedPick", "DraftState", "snake_team_for_pick"]
+__all__ = [
+    "OFF_BOARD_PREFIX",
+    "ResolvedPick",
+    "DraftState",
+    "off_board_id",
+    "parse_off_board_id",
+    "snake_team_for_pick",
+]
 
 logger = logging.getLogger(__name__)
+
+#: Raw-id prefix for **off-board picks** — a player who exists in the real
+#: draft room but not in our store (a deep rookie, an obscure DEF). The id
+#: encodes the position (and an optional label) so the pick still consumes the
+#: right roster slot and the needs/survival math stays correct:
+#: ``OFF:LB:Some Guy``. These ids resolve to no canonical player on purpose.
+OFF_BOARD_PREFIX = "OFF:"
+
+
+def off_board_id(position: str, label: str = "") -> str:
+    """Build an off-board raw id (``OFF:{POS}:{label}``).
+
+    Dots are stripped from the label — the id travels inside a Yahoo-shaped
+    ``player_key`` (``{game}.p.{id}``) whose parser splits on dots.
+    """
+    clean_label = (label or "").replace(".", " ").strip()
+    return f"{OFF_BOARD_PREFIX}{(position or '').strip().upper()}:{clean_label}"
+
+
+def parse_off_board_id(raw_id: str) -> tuple[str, str] | None:
+    """``(position, label)`` from an off-board raw id, else ``None``."""
+    if not raw_id.startswith(OFF_BOARD_PREFIX):
+        return None
+    rest = raw_id[len(OFF_BOARD_PREFIX):]
+    position, _, label = rest.partition(":")
+    return position.strip().upper(), label.strip()
 
 
 @dataclass(slots=True)
@@ -101,6 +134,8 @@ class DraftState:
         return None
 
     def _log_unmapped(self, raw_id: str, where: str) -> None:
+        if raw_id.startswith(OFF_BOARD_PREFIX):
+            return  # deliberate off-board entry — not a resolution failure
         if raw_id not in self._logged_unmapped:
             self._logged_unmapped.add(raw_id)
             logger.warning(
@@ -197,17 +232,26 @@ class DraftState:
         """Team keys that had keepers seeded."""
         return list(self._keepers)
 
-    def team_acquisitions(self, team_key: str) -> list[tuple[str | None, bool, int | None]]:
-        """A team's roster so far as ``(canonical_id, unmapped, pick_no)``:
+    def team_acquisitions(
+        self, team_key: str
+    ) -> list[tuple[str | None, bool, int | None, str]]:
+        """A team's roster so far as ``(canonical_id, unmapped, pick_no, raw_id)``:
         seeded keepers first (pick None), then its made picks in pick order.
+        ``raw_id`` lets callers recover position/label for unmapped off-board
+        picks (:func:`parse_off_board_id`).
         """
-        out: list[tuple[str | None, bool, int | None]] = [
-            (cid, False, None) for cid in self._keepers.get(team_key, [])
+        out: list[tuple[str | None, bool, int | None, str]] = [
+            (cid, False, None, cid) for cid in self._keepers.get(team_key, [])
         ]
-        out.extend((None, True, None) for _ in self._keeper_unmapped.get(team_key, []))
+        out.extend(
+            (None, True, None, raw)
+            for raw in self._keeper_unmapped.get(team_key, [])
+        )
         for rp in self.resolved:
             if rp.pick.team_key == team_key:
-                out.append((rp.canonical_id, rp.canonical_id is None, rp.pick.pick))
+                out.append(
+                    (rp.canonical_id, rp.canonical_id is None, rp.pick.pick, rp.raw_id)
+                )
         return out
 
     def my_unmapped_count(self) -> int:

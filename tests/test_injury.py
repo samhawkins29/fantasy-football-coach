@@ -79,10 +79,36 @@ def test_normalize_status(raw, expected):
 
 
 def test_status_discount_direction():
-    # The founder's ordering requirement: Out << Questionable << Healthy.
+    # Soft (dial-gated) severities order: healthy < Questionable < Doubtful;
+    # hard designations moved to the always-on availability haircuts (P0-5)
+    # with the same severity ordering, IR worst.
+    from fantasy_coach.value.injury import AVAILABILITY_HAIRCUTS
+
     assert STATUS_DISCOUNTS[""] == 0.0
     assert 0 < STATUS_DISCOUNTS["Q"] < STATUS_DISCOUNTS["D"]
-    assert STATUS_DISCOUNTS["D"] < STATUS_DISCOUNTS["O"] < STATUS_DISCOUNTS["IR"]
+    assert "O" not in STATUS_DISCOUNTS  # hard statuses are not dial business
+    assert (
+        AVAILABILITY_HAIRCUTS["O"]
+        < AVAILABILITY_HAIRCUTS["PUP"]
+        < AVAILABILITY_HAIRCUTS["IR"]
+    )
+
+
+def test_availability_haircut_always_on_and_season_ending():
+    from fantasy_coach.value.injury import (
+        SEASON_ENDING_HAIRCUT,
+        availability_haircut,
+    )
+
+    assert availability_haircut(_risk(status="Q")) == 0.0  # soft -> dial only
+    assert availability_haircut(_risk(status="O")) == 0.25
+    pup = _risk(status="PUP")
+    assert availability_haircut(pup) == 0.45
+    pup.report.detail = "Achilles"
+    assert availability_haircut(pup) == SEASON_ENDING_HAIRCUT  # near-zero value
+    acl = _risk(status="IR")
+    acl.report.detail = "ACL"
+    assert availability_haircut(acl) == SEASON_ENDING_HAIRCUT
 
 
 # --------------------------------------------------------------------------- #
@@ -320,10 +346,20 @@ def test_playoff_weight_amplifies_durability_but_not_status():
 
 
 def test_total_discount_capped_and_multiplier_off_at_zero_weight():
-    worst = _risk(status="IR", avg_missed=17.0, soft=3)
-    assert total_discount(worst, playoff_weight=1.0) == TOTAL_DISCOUNT_CAP
+    # The dial covers soft status + durability only (hard statuses moved to
+    # the always-on haircut); the cap still bounds a stacked soft case.
+    worst = _risk(status="D", avg_missed=17.0, soft=3)
+    dial = total_discount(worst, playoff_weight=1.0)
+    assert dial <= TOTAL_DISCOUNT_CAP
+    assert dial == pytest.approx(0.15 + worst.durability.discount * 1.5)
     assert injury_multiplier(worst, weight=0.0) == 1.0  # the off-by-default contract
-    assert injury_multiplier(worst, weight=1.0) == 1.0 - TOTAL_DISCOUNT_CAP
+    assert injury_multiplier(worst, weight=1.0, playoff_weight=1.0) == pytest.approx(
+        1.0 - dial
+    )
+    # An IR player's *dial* discount is durability-only -- the designation
+    # itself is handled by availability_haircut, never double-counted.
+    ir = _risk(status="IR")
+    assert total_discount(ir) == 0.0
 
 
 def test_injury_note_narrates_status_and_risk():
@@ -365,7 +401,7 @@ def _build_board(risk=None, injury_weight=0.0):
 def test_board_weight_zero_is_bit_identical_with_flags_visible():
     base = _build_board()
     risk = build_risk_index(
-        {"R1": InjuryReport(source="yahoo", status="O", detail="Knee")},
+        {"R1": InjuryReport(source="yahoo", status="Q", detail="Knee")},
         {"W1": _risk(avg_missed=6.0).durability},
     )
     flagged = _build_board(risk=risk, injury_weight=0.0)
@@ -377,21 +413,40 @@ def test_board_weight_zero_is_bit_identical_with_flags_visible():
         (e.vorp, e.draft_value) for e in flagged.entries
     ]
     by_id = {e.canonical_id: e for e in flagged.entries}
-    assert by_id["R1"].injury_status == "O"  # flag visible…
+    assert by_id["R1"].injury_status == "Q"  # flag visible…
     assert by_id["R1"].injury_discount is None  # …value untouched
     assert by_id["W1"].durability_risk == RISK_ELEVATED
     assert flagged.injury_weight == 0.0
 
 
+def test_board_hard_status_haircut_applies_regardless_of_dial():
+    # P0-5: OUT costs expected games whatever the dial says -- R1 (VORP 100)
+    # shades to 75 even at injury_weight=0; a PUP-Achilles drops near zero.
+    risk = build_risk_index(
+        {
+            "R1": InjuryReport(source="sleeper", status="O"),
+            "W1": InjuryReport(source="sleeper", status="PUP", detail="Achilles"),
+        }
+    )
+    board = _build_board(risk=risk, injury_weight=0.0)
+    by_id = {e.canonical_id: e for e in board.entries}
+    assert by_id["R1"].vorp == 100.0  # raw VORP never touched
+    assert by_id["R1"].draft_value == 75.0  # 100 x (1 - 0.25)
+    assert by_id["R1"].injury_discount == 0.25
+    assert by_id["W1"].draft_value == pytest.approx(45.0 * 0.1)  # season-ending
+    assert by_id["W1"].injury_discount == 0.9
+
+
 def test_board_weight_shades_value_and_reorders():
-    # R1 (VORP 100) ruled OUT at full weight: 100 × (1−0.30) = 70 < R2's 80.
+    # R1 (VORP 100) ruled OUT: the 0.25 availability haircut applies at any
+    # weight -> 100 x (1-0.25) = 75 < R2's 80.
     risk = build_risk_index({"R1": InjuryReport(source="sleeper", status="O")})
     board = _build_board(risk=risk, injury_weight=1.0)
     by_id = {e.canonical_id: e for e in board.entries}
     assert by_id["R1"].vorp == 100.0  # raw VORP never touched
-    assert by_id["R1"].draft_value == 70.0
-    assert by_id["R1"].injury_discount == 0.30
-    assert "OUT" in by_id["R1"].injury_note and "value shaded 30%" in by_id["R1"].injury_note
+    assert by_id["R1"].draft_value == 75.0
+    assert by_id["R1"].injury_discount == 0.25
+    assert "OUT" in by_id["R1"].injury_note and "value shaded 25%" in by_id["R1"].injury_note
     assert by_id["R2"].overall_rank < by_id["R1"].overall_rank  # dropped below R2
     # tiers cluster season VORP — identical to the unshaded board
     base_tiers = {e.canonical_id: e.tier for e in _build_board().entries}
@@ -465,7 +520,7 @@ def test_replace_board_persists_injury_columns(draft_store, draft_settings):
         [DRAFT_LEAGUE_KEY],
     )[0]
     assert row["injury_status"] == "IR"
-    assert row["injury_discount"] == 0.5
+    assert row["injury_discount"] == 0.55  # the always-on IR availability haircut
     assert "IR" in row["injury_note"]
     meta = draft_store.board_meta(DRAFT_LEAGUE_KEY)
     assert meta["injury_weight"] == 1.0
@@ -503,7 +558,7 @@ def test_warm_store_injury_flow(draft_settings):
         "SELECT * FROM value_board WHERE canonical_id = 'R1'"
     )[0]
     assert row["injury_status"] == "IR"
-    assert row["draft_value"] == pytest.approx(50.0)  # 100 × (1 − 0.5)
+    assert row["draft_value"] == pytest.approx(45.0)  # 100 x (1 - 0.55 IR haircut)
     w1 = store.sql("SELECT * FROM value_board WHERE canonical_id = 'W1'")[0]
     assert w1["durability_risk"] == RISK_ELEVATED
     store.close()
@@ -583,8 +638,29 @@ def test_loop_status_recheck_drops_newly_out_player(draft_store, draft_settings)
     )
 
 
-def test_loop_weight_zero_flags_without_reordering(draft_store, draft_settings):
-    source = FlippingStatusSource()
+class QFlippingStatusSource:
+    """Healthy first, then R1 flips to Questionable (a soft designation)."""
+
+    name = "sleeper"
+
+    def __init__(self):
+        self.fetches = 0
+
+    def fetch(self):
+        self.fetches += 1
+        if self.fetches == 1:
+            return {"R1": InjuryReport(source="sleeper", status="", fetched_at=T0)}
+        return {
+            "R1": InjuryReport(
+                source="sleeper", status="Q", detail="Knee", fetched_at=T0_PLUS_5MIN
+            )
+        }
+
+
+def test_loop_weight_zero_soft_status_flags_without_reordering(draft_store, draft_settings):
+    # The off-by-default contract now covers SOFT designations only: a
+    # Questionable at weight 0 is flagged but never re-ranked.
+    source = QFlippingStatusSource()
     loop, _ = _status_loop(
         draft_store, draft_settings, injury_weight=0.0, status_source=source
     )
@@ -592,8 +668,22 @@ def test_loop_weight_zero_flags_without_reordering(draft_store, draft_settings):
     snap = loop.poll_once()
     assert loop.recommendation.player.entry.canonical_id == "R1"  # ranking unchanged
     r1 = next(p for p in snap["available"] if p["canonical_id"] == "R1")
-    assert r1["injury_status"] == "O"  # …but the flag is visible
-    assert any("OUT" in reason for reason in snap["recommendation"]["reasons"])
+    assert r1["injury_status"] == "Q"  # …but the flag is visible
+
+
+def test_loop_weight_zero_hard_status_still_drops(draft_store, draft_settings):
+    # P0-5: a player ruled OUT drops even with the dial off -- expected games
+    # lost is a fact of the designation, not a risk preference.
+    source = FlippingStatusSource()
+    loop, _ = _status_loop(
+        draft_store, draft_settings, injury_weight=0.0, status_source=source
+    )
+    loop.poll_once()
+    snap = loop.poll_once()
+    assert loop.recommendation.player.entry.canonical_id == "R2"  # R1: 100x0.75 = 75 < 80
+    r1 = next(p for p in snap["available"] if p["canonical_id"] == "R1")
+    assert r1["injury_status"] == "O"
+    assert r1["injury_discount"] == 0.25
 
 
 def test_loop_status_interval_paces_the_source(draft_store, draft_settings):

@@ -290,3 +290,109 @@ def test_routes_are_absent_without_manual_mode(draft_store, draft_settings):
         assert _get(srv.url + "api/state")["manual"] is False
         status, out = _post(srv.url + "api/pick", {"player": "R1"})
         assert status == 404
+
+
+# --------------------------------------------------------------------------- #
+# Off-board picks (P0-2c): the room drafts a player our store doesn't know
+# --------------------------------------------------------------------------- #
+
+
+def test_off_board_pick_consumes_slot_and_roster_without_stalling(draft_store, draft_settings):
+    ctl, loop = _manual(draft_store, draft_settings)
+    loop.poll_once()
+    out = ctl.mark("R1")  # my pick 1
+    # Rival drafts a rookie RB the board has never heard of — pick 2 must be
+    # consumable anyway, and their roster must show an RB slot filled.
+    out = ctl.mark_unknown("RB", name="Mystery Rookie", team_key=T2)
+    s = out["state"]
+    assert out["ok"]
+    assert s["draft"]["current_pick"] == 3  # no stall: the clock advanced
+    assert s["draft"]["on_the_clock"]["is_me"] is False  # snake: Rival again
+    rival = next(t for t in s["teams"] if t["team_key"] == T2)
+    rb_slots = [sl for sl in rival["roster"] if sl["label"] == "RB" and sl["player"]]
+    assert rb_slots and rb_slots[0]["player"]["name"] == "Mystery Rookie"
+    assert rb_slots[0]["player"]["position"] == "RB"
+    # …and their RB need shrank accordingly (1 of 2 dedicated slots gone).
+    assert rival["needs"]["open_starters"].get("RB", 0) == 1
+    recent = s["recent_picks"][0]
+    assert recent["name"] == "Mystery Rookie" and recent["position"] == "RB"
+
+
+def test_two_anonymous_off_board_picks_stay_distinct(draft_store, draft_settings):
+    ctl, loop = _manual(draft_store, draft_settings)
+    loop.poll_once()
+    ctl.mark_unknown("LB", team_key=T1)
+    out = ctl.mark_unknown("LB", team_key=T2)
+    s = out["state"]
+    assert s["draft"]["pick_count"] == 2  # not one moved pick
+    assert s["draft"]["current_pick"] == 3
+
+
+def test_off_board_pick_requires_a_position(draft_store, draft_settings):
+    ctl, loop = _manual(draft_store, draft_settings)
+    loop.poll_once()
+    with pytest.raises(ValueError, match="position"):
+        ctl.mark_unknown("")
+
+
+def test_off_board_pick_survives_store_restart(draft_store, draft_settings):
+    ctl, loop = _manual(draft_store, draft_settings, record=True)
+    loop.poll_once()
+    ctl.mark_unknown("DEF", name="Some Defense", team_key=T1)
+    # A fresh source + loop restores from draft_picks — the off-board id
+    # round-trips through the player_key and still parses.
+    src2 = ManualPickSource([T1, T2], rounds=8, game_code="sim")
+    restored = src2.restore(draft_store.draft_picks(DRAFT_LEAGUE_KEY))
+    assert restored == 1
+    clock = FakeClock()
+    loop2 = DraftLoop(
+        draft_store, draft_settings, src2, my_team_key=T1, mode="manual",
+        record_to_store=False, draft_order=[T1, T2],
+        time_func=clock.time, sleep_func=clock.sleep,
+    )
+    s = loop2.poll_once()
+    assert s["recent_picks"][0]["name"] == "Some Defense"
+    assert s["recent_picks"][0]["position"] == "DEF"
+
+
+def test_off_board_keeper_recorded_via_position(draft_store, draft_settings):
+    from fantasy_coach.draft.manual import KeeperBook
+    from fantasy_coach.league import KeeperRules
+
+    src = ManualPickSource([T1, T2], rounds=8, game_code="sim")
+    clock = FakeClock()
+    loop = DraftLoop(
+        draft_store, draft_settings, src, my_team_key=T1, mode="manual",
+        record_to_store=False, draft_order=[T1, T2],
+        time_func=clock.time, sleep_func=clock.sleep,
+    )
+    rows = draft_store.sql("SELECT canonical_id, name, position, team FROM players")
+    book = KeeperBook(draft_store, DRAFT_LEAGUE_KEY, KeeperRules(), rounds=8)
+    ctl = ManualDraft(
+        source=src, loop=loop, finder=PlayerFinder(dict(r) for r in rows),
+        team_names={T1: "You", T2: "Rival"}, keepers=book,
+    )
+    loop.poll_once()
+    out = ctl.add_keeper(T2, "", last_round=7, off_position="WR", off_name="Rookie Keeper")
+    assert out["ok"]
+    kept = out["keepers"]["teams"]
+    rival = next(t for t in kept if t["team_key"] == T2)
+    assert rival["keepers"][0]["name"] == "Rookie Keeper"
+    assert rival["keepers"][0]["cost_round"] == 4  # 7 − 3
+    # The cost-round pick is pre-made for the keeper.
+    pick_no = src.pick_number_for(T2, 4)
+    assert pick_no in src.keeper_pick_numbers
+
+
+def test_http_off_board_route(draft_store, draft_settings):
+    ctl, loop = _manual(draft_store, draft_settings)
+    loop.poll_once()
+    with CompanionServer(loop.snapshot, port=0, manual=ctl) as srv:
+        status, out = _post(
+            srv.url + "api/pick_offboard",
+            {"position": "LB", "name": "Edge Guy", "team_key": T2},
+        )
+        assert status == 200 and out["ok"]
+        assert out["state"]["draft"]["current_pick"] == 2
+        status, out = _post(srv.url + "api/pick_offboard", {"position": ""})
+        assert status == 400 and "position" in out["error"]

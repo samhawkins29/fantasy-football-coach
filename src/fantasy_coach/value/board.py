@@ -75,7 +75,12 @@ from fantasy_coach.ingest.names import normalize_position
 from fantasy_coach.ingest.projections import score_stats
 from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.ingest.sources import ProjectionRecord
-from fantasy_coach.value.injury import PlayerRisk, injury_note, total_discount
+from fantasy_coach.value.injury import (
+    PlayerRisk,
+    availability_haircut,
+    injury_note,
+    total_discount,
+)
 from fantasy_coach.value.schedule import (
     blend_value,
     playoff_weeks,
@@ -90,11 +95,14 @@ __all__ = [
     "SOURCE_PROJECTION",
     "SOURCE_ADP",
     "SOURCE_FLAT",
+    "STREAMING_POSITIONS",
+    "STREAM_VALUE_FACTOR",
     "BoardEntry",
     "ValueBoard",
     "starter_demand",
     "startable_positions",
     "replacement_baselines",
+    "streaming_baselines",
     "assign_tiers",
     "build_value_board",
 ]
@@ -112,6 +120,28 @@ _FLEX_CODES = {"Q": "QB", "W": "WR", "R": "RB", "T": "TE", "D": "DEF"}
 #: most common size. Only a fallback — ``build_value_board(num_teams=…)`` and
 #: ``settings.max_teams`` both take precedence.
 _DEFAULT_NUM_TEAMS = 12
+
+#: Positions a sharp drafter *streams* rather than rosters: deep supply, one
+#: starting slot, weekly matchup-driven scoring (team defenses, kickers, and
+#: the IDP groups in IDP-lite leagues). Their season-total VORP overstates the
+#: realized edge — see :func:`streaming_baselines`.
+STREAMING_POSITIONS = frozenset({"K", "DEF", "DL", "LB", "DB"})
+
+#: For streaming positions, the residual value above the streaming baseline is
+#: compressed by this factor. Rationale (a documented model estimate, like
+#: everything else): season-total projections at these positions are mostly
+#: volume noise (tackle counts regress hard year to year) and a streamer
+#: captures much of the projected gap by picking weekly matchups — so the
+#: *realized* season edge of drafting the top guy over streaming the position
+#: is roughly half the projected one.
+STREAM_VALUE_FACTOR = 0.5
+
+#: The streaming baseline band: the mean projected points of the players
+#: ranked ``num_teams`` .. ``2.5 × num_teams`` at the position — "what a
+#: streamer actually gets over the season". The applied baseline is
+#: ``max(demand baseline, band mean)`` so it can only *raise* replacement
+#: level, never hand extra value to a deep position.
+_STREAM_BAND = (1.0, 2.5)  # multiples of num_teams (start rank, end rank)
 
 
 @dataclass(slots=True)
@@ -305,6 +335,8 @@ def replacement_baselines(
     points_by_pos: dict[str, Sequence[float]],
     settings: LeagueSettings,
     num_teams: int,
+    *,
+    demand: tuple[Mapping[str, int], Sequence[tuple[tuple[str, ...], int]]] | None = None,
 ) -> dict[str, float]:
     """Replacement-level points per position, from the league's real demand.
 
@@ -315,16 +347,24 @@ def replacement_baselines(
     scoring advantage warrants). The baseline is the first player left standing
     — the best player nobody would start.
 
+    ``demand`` overrides the league-wide ``(dedicated, flex)`` starter demand
+    derived from ``settings × num_teams``. The live draft loop passes the
+    league's **remaining** demand here (every team's still-unfilled slots): as
+    rosters fill, both the pool *and* the demand shrink together, so replacement
+    level stays "the best player who would not be started from here on" instead
+    of drifting down the drained pool (which broke cross-position comparisons
+    from pick 1 in keeper drafts).
+
     A pool exhausted by demand (fewer projected players than starters) baselines
     at its last player's points; an empty pool gets no baseline entry.
     """
     pools = {pos: list(pts) for pos, pts in points_by_pos.items() if pts}
     consumed = {pos: 0 for pos in pools}
-    dedicated, flex = starter_demand(settings, num_teams)
+    dedicated, flex = demand if demand is not None else starter_demand(settings, num_teams)
 
-    for pos, demand in dedicated.items():
+    for pos, want in dedicated.items():
         if pos in pools:
-            consumed[pos] = min(demand, len(pools[pos]))
+            consumed[pos] = min(want, len(pools[pos]))
 
     for eligible, total in flex:
         for _ in range(total):
@@ -345,6 +385,34 @@ def replacement_baselines(
         pos: pool[consumed[pos]] if consumed[pos] < len(pool) else pool[-1]
         for pos, pool in pools.items()
     }
+
+
+def streaming_baselines(
+    baselines: dict[str, float],
+    points_by_pos: Mapping[str, Sequence[float]],
+    num_teams: int,
+) -> dict[str, float]:
+    """Raise :data:`STREAMING_POSITIONS` baselines to the streaming level.
+
+    For each streamable position present, the baseline becomes
+    ``max(demand baseline, mean of the players ranked N..2.5N)`` (``N`` =
+    ``num_teams``) — what a manager streaming the position off waivers
+    actually gets over a season. The max means deep-supply positions can only
+    lose paper value, never gain it. Positions outside the set pass through
+    untouched. Returns a new dict.
+    """
+    out = dict(baselines)
+    lo_mult, hi_mult = _STREAM_BAND
+    for pos in STREAMING_POSITIONS:
+        pool = points_by_pos.get(pos)
+        if pos not in out or not pool:
+            continue
+        lo = min(len(pool) - 1, max(0, int(lo_mult * num_teams) - 1))
+        hi = min(len(pool), max(lo + 1, math.ceil(hi_mult * num_teams)))
+        band = pool[lo:hi]
+        if band:
+            out[pos] = max(out[pos], sum(band) / len(band))
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -423,6 +491,7 @@ def build_value_board(
     settings: LeagueSettings,
     *,
     num_teams: int | None = None,
+    demand: tuple[Mapping[str, int], Sequence[tuple[tuple[str, ...], int]]] | None = None,
     players: Iterable[CanonicalPlayer] | None = None,
     schedule: SeasonSchedule | None = None,
     playoff_weight: float = 0.0,
@@ -445,6 +514,10 @@ def build_value_board(
             come from here; nothing is hardcoded. The fantasy-playoff weeks for
             the schedule fields come from here too (§step 5).
         num_teams: League size. Defaults to ``settings.max_teams``, then 12.
+        demand: Optional ``(dedicated, flex)`` remaining-starter-demand
+            override for the replacement baselines (see
+            :func:`replacement_baselines`) — the live loop's "pool and demand
+            shrink together" fix. ``None`` uses the full league demand.
         players: Optional canonical players (from M3's ``PlayerIndex``). Enables
             the gap-fill paths: anyone here *without* a matching projection gets
             ADP-derived value (``market.adp``) or, for K/DEF, a late-round flat
@@ -522,15 +595,27 @@ def build_value_board(
             )
         )
 
-    # 2. Baselines from roster demand, 3. VORP.
+    # 2. Baselines from roster demand (streaming positions raised to the
+    #    streaming level — deep single-slot positions are streamed, not
+    #    rostered), 3. VORP (compressed for streaming positions: the realized
+    #    edge of drafting the top IDP/DEF over streaming is far smaller than
+    #    the projected season-total gap).
     points_by_pos: dict[str, list[float]] = {}
     for e in entries:
         points_by_pos.setdefault(e.position, []).append(e.points or 0.0)
     for pool in points_by_pos.values():
         pool.sort(reverse=True)
-    baselines = replacement_baselines(points_by_pos, settings, teams)
+    baselines = replacement_baselines(points_by_pos, settings, teams, demand=demand)
+    baselines = streaming_baselines(baselines, points_by_pos, teams)
+
+    def _vorp_of(position: str, pts: float) -> float:
+        raw = pts - baselines.get(position, 0.0)
+        if position in STREAMING_POSITIONS:
+            raw *= STREAM_VALUE_FACTOR
+        return raw
+
     for e in entries:
-        e.vorp = round((e.points or 0.0) - baselines.get(e.position, 0.0), 2)
+        e.vorp = round(_vorp_of(e.position, e.points or 0.0), 2)
 
     # 3b. Distribution (upgrade 1): floor/ceiling re-centred on league points
     # as ratios of the source's reference-scale spread, VORP-bracketed.
@@ -538,11 +623,10 @@ def build_value_board(
         if ratios is None or e.points is None:
             continue
         lo, hi = ratios
-        baseline = baselines.get(e.position, 0.0)
         e.floor = round(e.points * lo, 2)
         e.ceiling = round(e.points * hi, 2)
-        e.floor_vorp = round(e.floor - baseline, 2)
-        e.ceiling_vorp = round(e.ceiling - baseline, 2)
+        e.floor_vorp = round(_vorp_of(e.position, e.floor), 2)
+        e.ceiling_vorp = round(_vorp_of(e.position, e.ceiling), 2)
 
     # 5. Gap-fill from ADP / flat for players the projection model can't see.
     skipped = 0
@@ -550,6 +634,8 @@ def build_value_board(
         curve = _fit_adp_curve(
             [(e.adp, e.vorp) for e in entries if e.adp is not None]
         )
+        adp_entries: list[BoardEntry] = []
+        flat_players: list[CanonicalPlayer] = []
         for p in players:
             if (p.ids.gsis_id or "") in projected_gsis:
                 continue
@@ -560,7 +646,7 @@ def build_value_board(
                 continue
             adp = p.market.adp
             if adp is not None:
-                entries.append(
+                adp_entries.append(
                     BoardEntry(
                         canonical_id=p.canonical_id,
                         name=p.name,
@@ -574,20 +660,37 @@ def build_value_board(
                     )
                 )
             elif p.position in ("K", "DEF"):
-                entries.append(
-                    BoardEntry(
-                        canonical_id=p.canonical_id,
-                        name=p.name,
-                        position=p.position,
-                        team=p.team,
-                        points=None,
-                        vorp=0.0,
-                        value_source=SOURCE_FLAT,
-                        bye_week=p.bye_week,
-                    )
-                )
+                flat_players.append(p)
             else:
                 skipped += 1  # no projection, no ADP, not K/DEF — undraftable
+        entries.extend(adp_entries)
+        # Flat K/DEF (no ADP at all) sit BELOW the market-priced ones at their
+        # position — an unpriced defense the mock rooms never draft must not
+        # outrank one they take in round 9 (which a naive flat 0.0 did when
+        # the ADP curve read negative).
+        worst_priced: dict[str, float] = {}
+        for e in entries:
+            if e.position in ("K", "DEF") and e.adp is not None:
+                worst_priced[e.position] = min(
+                    worst_priced.get(e.position, 0.0), e.vorp
+                )
+        for p in flat_players:
+            if p.position in worst_priced:
+                floor_value = min(0.0, worst_priced[p.position] - 1.0)
+            else:
+                floor_value = 0.0  # no priced peers — the late-round flat
+            entries.append(
+                BoardEntry(
+                    canonical_id=p.canonical_id,
+                    name=p.name,
+                    position=p.position,
+                    team=p.team,
+                    points=None,
+                    vorp=round(floor_value, 2),
+                    value_source=SOURCE_FLAT,
+                    bye_week=p.bye_week,
+                )
+            )
 
     # 6. Schedule awareness (step 5): playoff VORP + blended draft value.
     pweeks = playoff_weeks(settings) if schedule is not None else []
@@ -598,6 +701,8 @@ def build_value_board(
                 e.bye_week = schedule.bye_week(e.team)
             if not e.is_projection_based or e.points is None or not e.team:
                 continue  # ADP/flat entries have no stat line to split
+            if e.position in STREAMING_POSITIONS:
+                continue  # streamed positions pick their own matchups weekly
             weekly = weekly_points(
                 e.points, e.team, e.position, schedule, through_week=season_weeks
             )
@@ -642,9 +747,14 @@ def build_value_board(
             )
             e.draft_value = round(e.rank_value + tilt, 2)
 
-    # 7. Injury awareness (step 6): stamp flags always; shade draft value only
-    # when the injury weight is on. Raw VORP and tiers are never touched — a
-    # hurt player is the same talent, just a riskier bet.
+    # 7. Injury awareness (step 6 + P0-5): stamp flags always. Two layers shade
+    # the draft value: the **availability haircut** for hard designations
+    # (O/SUS/PUP/NFI/IR — expected games lost is a fact of the designation, so
+    # it applies REGARDLESS of the injury dial; season-ending injuries cap the
+    # value near zero) and the **dial-gated** soft-risk discount
+    # (Questionable/Doubtful + durability history, scaled by ``injury_weight``).
+    # Raw VORP and tiers are never touched — a hurt player is the same talent,
+    # just one who will play fewer games.
     if risk is not None:
         applied_pw = playoff_weight if pweeks else 0.0
         for e in entries:
@@ -655,14 +765,13 @@ def build_value_board(
             e.injury_detail = r.report.detail if r.report is not None else ""
             e.durability_risk = r.durability_risk
             shaded_pct = None
-            if injury_weight > 0:
-                discount = injury_weight * total_discount(
-                    r, playoff_weight=applied_pw
-                )
-                if discount > 0 and e.rank_value > 0:
-                    e.injury_discount = round(discount, 3)
-                    e.draft_value = round(e.rank_value * (1.0 - discount), 2)
-                    shaded_pct = discount * 100.0
+            haircut = availability_haircut(r)
+            dial = injury_weight * total_discount(r, playoff_weight=applied_pw)
+            combined = 1.0 - (1.0 - haircut) * (1.0 - max(0.0, dial))
+            if combined > 0 and e.rank_value > 0:
+                e.injury_discount = round(combined, 3)
+                e.draft_value = round(e.rank_value * (1.0 - combined), 2)
+                shaded_pct = combined * 100.0
             e.injury_note = injury_note(r, shaded_pct=shaded_pct)
 
     # Ranks: overall by draft value — identical to VORP order when the playoff

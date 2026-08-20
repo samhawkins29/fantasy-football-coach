@@ -145,7 +145,7 @@ def test_blend_is_weighted_mean_and_scales_stats():
 
 
 def test_default_weights_anchor_on_the_model():
-    # 0.7·200 + 0.3·300 = 230.
+    # 0.6·200 + 0.4·300 = 240 — the model anchors, the market corrects.
     src = make_consensus(
         Path("unused"),
         model=FakeModel([mrec("00-D", "Blend Me", "WR", 200.0)]),
@@ -153,7 +153,7 @@ def test_default_weights_anchor_on_the_model():
         curve_fitter=flat_curve(300.0),
     )
     (rec,) = src._compute(2026)
-    assert rec.points == pytest.approx(230.0)
+    assert rec.points == pytest.approx(240.0)
 
 
 def test_weights_renormalize_over_present_signals():
@@ -275,9 +275,8 @@ def test_market_on_the_models_line_moves_nothing():
 
 
 def test_thin_position_falls_back_to_global_curve():
-    # A fitter that encodes how many pairs it saw: positional WR fit (3 pairs)
-    # implies 300, the global fit (4 pairs) implies 400. The lone RB has too
-    # few positional pairs (min 3) and must use the global curve.
+    # WRs (3 priced players) use rank calibration; the lone RB has too few
+    # positional pairs (min 3) and must use the injected global curve.
     def counting_fitter(pairs):
         return lambda adp, n=len(pairs): 100.0 * n
 
@@ -296,8 +295,39 @@ def test_thin_position_falls_back_to_global_curve():
         curve_fitter=counting_fitter,
     )
     out = {r.source_id: r for r in src._compute(2026)}
-    assert out["00-1"].points == pytest.approx((100.0 + 300.0) / 2)  # WR fit
-    assert out["00-9"].points == pytest.approx((100.0 + 400.0) / 2)  # global fit
+    # WR rank calibration: all three WRs share 100 model points, so the
+    # market signal IS 100 and the blend is the identity.
+    assert out["00-1"].points == pytest.approx(100.0)
+    # The lone RB uses the global fit over all 4 pairs → market 400.
+    assert out["00-9"].points == pytest.approx((100.0 + 400.0) / 2)
+
+
+def test_rank_calibration_adopts_market_order_on_model_scale():
+    # The model loves W-OLD (300) and dismisses W-BREAKOUT (150); the market
+    # drafts W-BREAKOUT first. Rank calibration hands W-BREAKOUT the model's
+    # best WR points (300) as its market signal — and the huge model-vs-market
+    # rank gap escalates the market share, so the breakout lands near the
+    # market's view, not the model's.
+    records = [
+        mrec("00-OLD", "W Old", "WR", 300.0),
+        mrec("00-MID", "W Mid", "WR", 220.0),
+        mrec("00-BRK", "W Breakout", "WR", 150.0),
+    ]
+    market = {"00-BRK": 1.0, "00-MID": 20.0, "00-OLD": 40.0}
+    src = make_consensus(
+        Path("unused"), model=FakeModel(records), market=market,
+        weights={"model": 0.6, "market": 0.4},
+    )
+    out = {r.source_id: r for r in src._compute(2026)}
+    # Breakout: market signal 300, rank gap 2/3 → share escalates to the
+    # 0.85 cap → 0.15×150 + 0.85×300 = 277.5.
+    assert out["00-BRK"].points == pytest.approx(277.5)
+    # Old: market signal 150 (market's 3rd WR), same escalation downward:
+    # 0.15×300 + 0.85×150 = 172.5 — the market demotion actually bites.
+    assert out["00-OLD"].points == pytest.approx(172.5)
+    # Mid agrees with the market (rank 2 both ways): base 0.4 share, signal
+    # = his own 220 → identity.
+    assert out["00-MID"].points == pytest.approx(220.0)
 
 
 # -- the pluggable extra slot (FantasyPros later) ------------------------------
@@ -488,8 +518,19 @@ def test_factory_consensus_wires_keyed_fantasypros_slot(tmp_path):
     assert extra.is_live
 
 
-def test_factory_default_ignores_market_and_stays_single_source():
+def test_factory_default_is_the_consensus_blend():
+    # P1-1: the DEFAULT source is now the model+market consensus — history-only
+    # rankings (a breakout QB at board #1000) are corrected by the market.
+    from fantasy_coach.ingest.consensus import ConsensusProjectionSource
+
     config = Config.load(environ={})
+    src = make_projection_source(config, market={"00-A": 5.0})
+    assert isinstance(src, ConsensusProjectionSource)
+    assert src.weights == {"model": 0.6, "market": 0.4}
+
+
+def test_factory_nflverse_ignores_market_and_stays_single_source():
+    config = Config.load(environ={"PROJECTION_SOURCE": "nflverse"})
     src = make_projection_source(config, market={"00-A": 5.0})
     assert isinstance(src, NflverseProjectionSource)
 

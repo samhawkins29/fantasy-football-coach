@@ -39,17 +39,21 @@ from fantasy_coach.clients.models import DraftPick, LeagueSettings
 from fantasy_coach.clients.throttle import DRAFT_POLL_INTERVAL
 from fantasy_coach.clients.yahoo import YahooClient
 from fantasy_coach.draft.recommend import (
-    NEED_WEIGHTS,
     Recommendation,
     RankedPlayer,
     RosterNeeds,
     assign_roster,
     build_recommendation,
     compute_needs,
+    need_weight,
     rank_available,
     roster_slots,
 )
-from fantasy_coach.draft.state import DraftState, snake_team_for_pick
+from fantasy_coach.draft.state import (
+    DraftState,
+    parse_off_board_id,
+    snake_team_for_pick,
+)
 from fantasy_coach.draft.survival import (
     RoomState,
     estimate_survival,
@@ -61,7 +65,12 @@ from fantasy_coach.ingest.injury import InjuryReport, merge_reports
 from fantasy_coach.ingest.schedule import SeasonSchedule
 from fantasy_coach.league import KeeperRules, keeper_note
 from fantasy_coach.store.store import CoachStore
-from fantasy_coach.value.board import ValueBoard, build_value_board
+from fantasy_coach.value.board import (
+    STREAMING_POSITIONS,
+    ValueBoard,
+    build_value_board,
+    starter_demand,
+)
 from fantasy_coach.value.injury import build_risk_index
 
 __all__ = ["PickSource", "YahooPickSource", "StatusSource", "DraftLoop"]
@@ -76,11 +85,32 @@ DEFAULT_STALE_AFTER = 12.0
 #: Positions the tier columns surface, in display order.
 _TIER_POSITIONS = ("QB", "RB", "WR", "TE")
 
+#: How fast a streamable position's need weight ramps to full urgency at the
+#: endgame: urgency = 1 − (spare picks beyond open starters) / ramp. With 5
+#: spare picks the IDP/DEF slots can comfortably wait; at 0 spare picks every
+#: pick must fill a starter and the weight is full.
+STREAM_URGENCY_RAMP = 5.0
+
 #: Default seconds between live injury-status re-checks. Deliberately much
 #: slower than the pick poll: the status source (Sleeper's full players blob)
 #: is a big pull, statuses change on the minutes scale, and politeness is a
 #: framework principle (§7) — the *pick* cadence stays 2.5s regardless.
 DEFAULT_STATUS_INTERVAL = 120.0
+
+
+def _unmapped_name(raw_id: str) -> str:
+    """Display name for a pick with no canonical identity (off-board aware)."""
+    off = parse_off_board_id(raw_id)
+    if off is None:
+        return f"id {raw_id}"
+    position, label = off
+    return label or (f"Off-board {position}" if position else "Off-board pick")
+
+
+def _unmapped_position(raw_id: str) -> str:
+    """Display position for a pick with no canonical identity."""
+    off = parse_off_board_id(raw_id)
+    return (off[0] or "?") if off else "?"
 
 
 class PickSource(Protocol):
@@ -217,7 +247,17 @@ class DraftLoop:
         if season is None:
             row = store.sql("SELECT MAX(season) AS s FROM projections")
             season = row[0]["s"] if row and row[0]["s"] is not None else None
-        self._projections = store.projection_records(season=season)
+        # When several projection sources coexist for the season (a
+        # nflverse↔consensus switch leaves both), load only the freshest one —
+        # an unfiltered read would put every player on the board twice.
+        src_rows = store.sql(
+            "SELECT source, MAX(updated_at) AS u FROM projections "
+            "WHERE season IS ? AND horizon = 'season' GROUP BY source "
+            "ORDER BY u DESC, source",
+            [season],
+        )
+        proj_source = src_rows[0]["source"] if src_rows else None
+        self._projections = store.projection_records(season=season, source=proj_source)
         self._players: list[CanonicalPlayer] = store.canonical_players()
         self._by_canonical = {p.canonical_id: p for p in self._players}
         self._adp_by_canonical = {
@@ -242,6 +282,7 @@ class DraftLoop:
         self._board: ValueBoard | None = None
         self._slots: list = []
         self._ranked: list[RankedPlayer] = []
+        self._stream_urgency_map: dict[str, float] = {}
         self._recommendation: Recommendation | None = None
         self._room: RoomState = RoomState()
         self._my_upcoming: list[int] = []
@@ -358,10 +399,23 @@ class DraftLoop:
         projections = [r for r in self._projections if r.source_id not in drafted]
         players = [p for p in self._players if p.canonical_id not in drafted]
         risk = build_risk_index(self._merged_reports, self._durability)
+        # Every team's roster (keepers + live picks) and needs come FIRST —
+        # the founder's own drives the need weighting, the others feed the
+        # survival model, and the sum of everyone's still-unfilled slots is
+        # the **remaining starter demand** the replacement baselines run
+        # against (P0-1: the pool and the demand shrink together, so
+        # replacement level doesn't drift down the drained pool).
+        self._team_slots = {
+            key: assign_roster(roster_slots(self._settings), self._team_roster_infos(key))
+            for key in self._all_team_keys()
+        }
+        self._team_needs = {k: compute_needs(v) for k, v in self._team_slots.items()}
+        remaining_dedicated, remaining_flex = self._remaining_demand()
         self._board = build_value_board(
             projections,
             self._settings,
             num_teams=self._num_teams,
+            demand=(remaining_dedicated, remaining_flex),
             players=players or None,
             schedule=self._schedule,
             playoff_weight=self._playoff_weight,
@@ -370,14 +424,6 @@ class DraftLoop:
             risk_preference=self._risk_preference,
             sos_weight=self._sos_weight,
         )
-        # Every team's roster (keepers + live picks) and needs — the founder's
-        # own drives the need weighting; the others feed the survival model
-        # ("who is actually picking before me and what do they still need").
-        self._team_slots = {
-            key: assign_roster(roster_slots(self._settings), self._team_roster_infos(key))
-            for key in self._all_team_keys()
-        }
-        self._team_needs = {k: compute_needs(v) for k, v in self._team_slots.items()}
         my_key = self.state.my_team_key
         slots = self._team_slots.get(my_key) or assign_roster(
             roster_slots(self._settings), self._my_roster_infos()
@@ -394,7 +440,7 @@ class DraftLoop:
         my_after = self._my_upcoming[1] if len(self._my_upcoming) > 1 else None
         positions = {e.position for e in self._board.entries}
         room_weights = [
-            {pos: NEED_WEIGHTS[n.tag(pos)] for pos in positions}
+            {pos: need_weight(n.tag(pos), pos) for pos in positions}
             for n in self._team_needs.values()
         ]
         scale_next = need_scale(
@@ -433,11 +479,15 @@ class DraftLoop:
             need_scale_next=scale_next,
             need_scale_after=scale_after,
         )
+        self._stream_urgency_map = self._stream_urgency(
+            needs, current_pick, remaining_dedicated, remaining_flex
+        )
         self._ranked = rank_available(
             self._board,
             needs,
             starter_bye_counts=self._starter_bye_counts(slots),
             survival=survival,
+            stream_urgency=self._stream_urgency_map,
         )
         # Picks between the one being decided and my following pick.
         decided = my_next if my_next is not None else current_pick
@@ -461,6 +511,80 @@ class DraftLoop:
             )
             if note:
                 self._recommendation.reasons.append(note)
+
+    def _remaining_demand(
+        self,
+    ) -> tuple[dict[str, int], list[tuple[tuple[str, ...], int]]]:
+        """The league's still-unfilled starter demand ``(dedicated, flex)``.
+
+        Sums every known team's open slots (:attr:`_team_needs`); teams the
+        loop cannot see yet (live mode before the order is known) count at
+        full per-team demand — they have no attributed picks, so nothing of
+        theirs is filled.
+        """
+        dedicated: dict[str, int] = {}
+        flex_counts: dict[tuple[str, ...], int] = {}
+        for needs in self._team_needs.values():
+            for pos, n in needs.open_starters.items():
+                dedicated[pos] = dedicated.get(pos, 0) + n
+            for elig in needs.open_flex:
+                flex_counts[elig] = flex_counts.get(elig, 0) + 1
+        missing = max(0, self._num_teams - len(self._team_needs))
+        if missing:
+            ded_one, flex_one = starter_demand(self._settings, 1)
+            for pos, n in ded_one.items():
+                dedicated[pos] = dedicated.get(pos, 0) + n * missing
+            for elig, n in flex_one:
+                flex_counts[elig] = flex_counts.get(elig, 0) + n * missing
+        return dedicated, list(flex_counts.items())
+
+    def _stream_urgency(
+        self,
+        needs: RosterNeeds,
+        current_pick: int,
+        dedicated: dict[str, int],
+        flex: list[tuple[tuple[str, ...], int]],
+    ) -> dict[str, float]:
+        """Urgency in ``[0, 1]`` per streamable position on the board (P0-3).
+
+        Mirrors how a sharp drafter (and :mod:`~fantasy_coach.draft.bots`'
+        ``IDP_ROUNDS_LEFT``) treats IDP/DEF/K: wait, unless (a) the endgame is
+        here — my spare picks beyond my open starting slots are running out —
+        or (b) the remaining startable supply at the position is approaching
+        the league's remaining demand (a late DEF run in a 32-DEF world).
+        """
+        positions = (
+            {e.position for e in self._board.entries} & STREAMING_POSITIONS
+            if self._board is not None
+            else set()
+        )
+        if not positions:
+            return {}
+        upcoming = (
+            self._upcoming_my_picks(current_pick, count=10_000)
+            if self._last_picks
+            else []
+        )
+        my_left = len(upcoming)
+        my_open = sum(needs.open_starters.values()) + len(needs.open_flex)
+        time_u = 0.0
+        if my_left:
+            slack = my_left - my_open
+            time_u = max(0.0, min(1.0, 1.0 - slack / STREAM_URGENCY_RAMP))
+        supply_by_pos: dict[str, int] = {}
+        for e in self._board.entries:
+            supply_by_pos[e.position] = supply_by_pos.get(e.position, 0) + 1
+        out: dict[str, float] = {}
+        for pos in positions:
+            demand_p = dedicated.get(pos, 0) + sum(
+                n for elig, n in flex if pos in elig
+            )
+            supply_u = 0.0
+            if demand_p > 0:
+                supply = supply_by_pos.get(pos, 0)
+                supply_u = max(0.0, min(1.0, 1.0 - (supply - demand_p) / demand_p))
+            out[pos] = round(max(time_u, supply_u), 3)
+        return out
 
     def _all_team_keys(self) -> list[str]:
         """Every team in round-1 order (configured, observed, or seen in picks)."""
@@ -495,7 +619,7 @@ class DraftLoop:
             needs = self._team_needs.get(key)
             if needs is None:
                 continue
-            out.append({pos: NEED_WEIGHTS[needs.tag(pos)] for pos in positions})
+            out.append({pos: need_weight(needs.tag(pos), pos) for pos in positions})
         return out
 
     def _current_pick(self) -> int:
@@ -615,10 +739,20 @@ class DraftLoop:
         arrive as picks and are labelled through ``keeper_labels``.
         """
         infos: list[dict[str, object]] = []
-        for cid, unmapped, pick_no in self.state.team_acquisitions(team_key):
+        for cid, unmapped, pick_no, raw_id in self.state.team_acquisitions(team_key):
             if unmapped:
+                # Off-board entries carry their position in the raw id, so the
+                # pick still fills the right roster slot and the needs math
+                # stays honest; a genuinely unknown id goes to the bench.
+                off = parse_off_board_id(raw_id)
+                position = off[0] if off else ""
+                label = (off[1] if off else "") or (
+                    f"Off-board {position}" if position else "Unmapped pick"
+                )
                 infos.append(
-                    {"canonical_id": "", "name": "Unmapped pick", "position": "", "team": "", "bye": None, "pick": pick_no}
+                    {"canonical_id": "", "name": label, "position": position,
+                     "team": "", "bye": None, "pick": pick_no,
+                     "keeper": self._keeper_labels.get(raw_id, "")}
                 )
                 continue
             p = self._by_canonical.get(cid or "")
@@ -759,8 +893,12 @@ class DraftLoop:
                     "team_key": rp.pick.team_key,
                     "team": self._team_name(rp.pick.team_key),
                     "is_me": rp.pick.team_key == my_key,
-                    "name": player.name if player else f"id {rp.raw_id}",
-                    "position": player.position if player else "?",
+                    "name": player.name if player else _unmapped_name(rp.raw_id),
+                    "position": (
+                        player.position
+                        if player
+                        else _unmapped_position(rp.raw_id)
+                    ),
                     "unmapped": player is None,
                 }
             )

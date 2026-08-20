@@ -463,6 +463,71 @@ def _load_durability(config: Config, *, refresh: bool = False):
         return None
 
 
+def _refresh_market(store, config: Config, *, num_teams: int, season: int, refresh: bool) -> list[str]:
+    """Free market layer (P0-2/P0-4): Sleeper player catalog + FFC ADP.
+
+    1. **Sleeper catalog** (free, keyless): the full current player universe —
+       rookies, team DEFs, current teams, ``yahoo_id``s — merged
+       non-destructively into the ``players`` table. Without this, an
+       offline-warmed store literally contains no rookies and no defenses.
+    2. **FantasyFootballCalculator ADP** (free, keyless): real mock-draft ADP
+       for the league's format/size into the ``adp`` table (source ``ffc``) —
+       what powers the ADP→VORP gap-fill, the consensus market blend, and
+       ADP-anchored survival.
+
+    ``refresh=True`` pulls live and rewrites the caches; ``False`` (the
+    offline ``setup-league`` path) serves the caches only. Every failure
+    degrades to a warning — prior rows stay.
+    """
+    from fantasy_coach.ingest.adp import FfcAdpSource, resolve_adp
+    from fantasy_coach.ingest.catalog import SleeperCatalogSource
+
+    warnings: list[str] = []
+    catalog = SleeperCatalogSource(cache_dir=config.cache_dir)
+    try:
+        players = catalog.warm_cache() if refresh else catalog.load()
+        written = store.upsert_players(players, merge=True)
+        folded = store.fold_duplicate_players()
+        console.print(
+            f"[dim]  Sleeper catalog: {len(players)} players "
+            f"(rookies/DEF included) merged — {written} rows touched, "
+            f"{folded} gsis-less duplicates folded[/]"
+        )
+    except Exception as exc:
+        if refresh:
+            try:
+                players = catalog.load()
+                store.upsert_players(players, merge=True)
+                warnings.append(f"Sleeper catalog pull failed ({exc}); cache used")
+            except Exception:
+                warnings.append(f"Sleeper catalog unavailable ({exc}); prior players kept")
+        else:
+            warnings.append(f"no Sleeper catalog cache ({exc}); prior players kept")
+
+    scoring_format = "ppr"  # full PPR confirmed for Sam's league
+    ffc = FfcAdpSource(scoring_format=scoring_format, teams=num_teams, cache_dir=config.cache_dir)
+    try:
+        records = ffc.warm_cache(season) if refresh else ffc.load(season)
+        rows, unresolved = resolve_adp(
+            records, store.sql("SELECT canonical_id, name, position, team FROM players")
+        )
+        written = store.upsert_adp(rows, source="ffc")
+        console.print(
+            f"[dim]  FFC ADP ({scoring_format}, {num_teams} teams): "
+            f"{written}/{len(records)} resolved onto players[/]"
+        )
+        if unresolved:
+            console.print(
+                f"[dim]  {len(unresolved)} ADP names unresolved (first: {unresolved[0]})[/]"
+            )
+    except Exception as exc:
+        if refresh:
+            warnings.append(f"FFC ADP pull failed ({exc}); prior adp rows kept")
+        else:
+            warnings.append(f"no FFC ADP cache ({exc}); prior adp rows kept")
+    return warnings
+
+
 def _crosswalk_players(yahoo_players):
     """Run the M3 crosswalk over a pulled Yahoo player universe.
 
@@ -569,9 +634,20 @@ def refresh(
     _vintage_table(store, "Before refresh")
     warnings: list[str] = []
 
+    # 0. The free market layer FIRST (P0-2/P0-4): Sleeper catalog (rookies +
+    #    DEFs + yahoo ids) and FFC ADP — the consensus projections built next
+    #    read the store's ADP lazily, so this order is what makes the default
+    #    model+market blend actually see the market.
+    settings_row = store.league_settings(league_key) if league_key else None
+    market_teams = (settings_row.max_teams if settings_row else None) or 10
+    console.print("[dim]Refreshing free market data (Sleeper catalog + FFC ADP)…[/]")
+    warnings.extend(
+        _refresh_market(store, config, num_teams=market_teams, season=season, refresh=True)
+    )
+
     # 1. Projections (periodic source — recomputed from latest data). The
     #    configured source is built here: consensus reads the store's current
-    #    ADP lazily (whatever a prior warm/refresh persisted).
+    #    ADP lazily (whatever this refresh / a prior warm persisted).
     projection_source = make_projection_source(
         config, market=lambda: market_adp_from_players(store.canonical_players())
     )
@@ -780,6 +856,12 @@ def setup_league(
         store.close()
         return
     season = default_season()
+    # Free market layer from the local caches (offline command — run
+    # ``refresh --skip-yahoo`` when online to re-pull them).
+    for w in _refresh_market(
+        store, config, num_teams=spec.num_teams, season=season, refresh=False
+    ):
+        console.print(f"[yellow]market:[/] {w}")
     projection_source = make_projection_source(
         config, market=lambda: market_adp_from_players(store.canonical_players())
     )
@@ -826,6 +908,184 @@ def setup_league(
         console.print(f"[dim]{len(stored)} keeper row(s) in the store for {spec.league_key}[/]")
     for note in spec.notes:
         console.print(f"[dim]note: {note}[/]")
+    store.close()
+
+
+def _snake_pick(slot: int, round_no: int, num_teams: int) -> int:
+    """The overall pick number slot ``slot`` owns in ``round_no`` (snake)."""
+    if round_no % 2 == 1:
+        return (round_no - 1) * num_teams + slot
+    return (round_no - 1) * num_teams + (num_teams - slot + 1)
+
+
+@app.command(name="keeper-value")
+def keeper_value(
+    candidate: str = typer.Option(
+        "", "--candidate", "-c",
+        help="Evaluate one candidate keeper by name (e.g. \"Puka Nacua\"). "
+        "Without it, every keeper stored for the league is evaluated.",
+    ),
+    last_round: int = typer.Option(
+        0, "--last-round",
+        help="[candidate] The round he was drafted in LAST year (cost = that "
+        "− cost_rounds_earlier). 0 = undrafted (costs the undrafted round).",
+    ),
+    cost_round: int = typer.Option(
+        0, "--cost-round",
+        help="[candidate] Override the cost round directly (skips the rule).",
+    ),
+    slot: int = typer.Option(
+        0, "--slot", help="Your round-1 draft slot. Default: draft.my_slot "
+        "from data/league.json, else mid-draft.",
+    ),
+    league: str = typer.Option("", "--league", "-l", help="League key."),
+) -> None:
+    """Keeper surplus (P1-5): is keeping a player worth the pick he costs?
+
+    ``surplus = value(player) − value of the expected best available at your
+    pick in his cost round`` — computed from the STORED board with every
+    stored keeper already removed from the pool (they're gone for everyone).
+    A positive surplus means the keeper beats what that pick would have
+    bought you; rank the candidates by surplus and keep the top ones (up to
+    ``keeper_rules.max_keepers``). Run before Sep 1 with a fresh board
+    (``refresh --skip-yahoo``).
+    """
+    from fantasy_coach.ingest.names import clean_name as _clean
+    from fantasy_coach.store import CoachStore
+
+    config = Config.load()
+    store = CoachStore(config.db_path)
+    league_key = league.strip() or config.yahoo_league_key
+    if not league_key:
+        rows = store.sql("SELECT league_key FROM league_settings")
+        if len(rows) == 1:
+            league_key = rows[0]["league_key"]
+        else:
+            console.print("[bold red]No league key[/] — pass --league or set YAHOO_LEAGUE_KEY.")
+            raise typer.Exit(code=1)
+    board = store.get_board(league_key)
+    if not board:
+        console.print(f"[bold red]No stored board for {league_key}[/] — run setup-league / refresh first.")
+        raise typer.Exit(code=1)
+    settings = store.league_settings(league_key)
+    num_teams = (settings.max_teams if settings else None) or 10
+    spec = _load_spec(config, league_key)
+    rules = spec.keeper_rules if spec else None
+    rounds = spec.rounds if spec else 17
+    if slot == 0 and spec is not None and spec.my_slot is not None:
+        slot = spec.my_slot
+    if slot == 0:
+        slot = (num_teams + 1) // 2
+        console.print(f"[yellow]No draft slot known — assuming mid-draft slot {slot} "
+                      "(set draft.my_slot or pass --slot).[/]")
+
+    def value_of(row) -> float:
+        return row["draft_value"] if row["draft_value"] is not None else row["vorp"]
+
+    keeper_rows = store.keepers(league_key)
+    kept_ids = {str(r["canonical_id"]) for r in keeper_rows}
+    pool = sorted(
+        (r for r in board if str(r["canonical_id"]) not in kept_ids),
+        key=value_of, reverse=True,
+    )
+
+    def expected_at(pick_no: int):
+        """The expected best available at overall pick ``pick_no`` — the
+        pool's ``pick_no``-th best (picks 1..n−1 remove the top n−1)."""
+        idx = min(len(pool) - 1, max(0, pick_no - 1))
+        return pool[idx]
+
+    def surplus_line(name: str, position: str, value: float, r_cost: int, team_slot: int):
+        pick_no = _snake_pick(team_slot, r_cost, num_teams)
+        alt = expected_at(pick_no)
+        return {
+            "name": name, "position": position, "value": value,
+            "cost_round": r_cost, "pick": pick_no,
+            "alt_name": alt["name"], "alt_pos": alt["position"],
+            "alt_value": value_of(alt), "surplus": value - value_of(alt),
+        }
+
+    if candidate.strip():
+        from fantasy_coach.league import KeeperRules, keeper_cost_round
+
+        cand_rules = rules or KeeperRules()
+        target = _clean(candidate)
+        matches = [r for r in board if _clean(r["name"]) == target]
+        if not matches:
+            matches = [r for r in board if target in _clean(r["name"])]
+        if not matches:
+            console.print(f"[bold red]{candidate!r} not on the stored board.[/]")
+            raise typer.Exit(code=1)
+        row = matches[0]
+        if cost_round > 0:
+            r_cost = cost_round
+        else:
+            try:
+                r_cost = keeper_cost_round(last_round or None, cand_rules)
+            except Exception as exc:
+                console.print(f"[bold red]Keeper rules:[/] {exc}")
+                raise typer.Exit(code=1)
+        line = surplus_line(row["name"], row["position"], value_of(row), r_cost, slot)
+        verdict = "KEEP" if line["surplus"] > 0 else "PASS"
+        console.print(
+            f"\n[bold]{line['name']}[/] ({line['position']}) — board value "
+            f"{line['value']:+.1f}, kept at your round-{r_cost} pick "
+            f"(overall #{line['pick']}, slot {slot})."
+        )
+        console.print(
+            f"Expected best available there instead: "
+            f"[bold]{line['alt_name']}[/] ({line['alt_pos']}, {line['alt_value']:+.1f})."
+        )
+        console.print(
+            f"[bold {'green' if line['surplus'] > 0 else 'red'}]Surplus "
+            f"{line['surplus']:+.1f} -> {verdict}[/] "
+            f"[dim](positive = the keeper beats the pick he costs; compare "
+            f"your candidates and keep the top {cand_rules.max_keepers})[/]"
+        )
+        store.close()
+        return
+
+    # League-wide view: every stored keeper's surplus + what the pool loses.
+    if not keeper_rows:
+        console.print(
+            "[yellow]No keepers stored yet.[/] Evaluate candidates with "
+            "--candidate \"Name\" --last-round N, or enter keepers via "
+            "data/league.json / the draft page."
+        )
+        store.close()
+        return
+    by_board = {str(r["canonical_id"]): r for r in board}
+    table = Table(title=f"Stored keepers — surplus vs the pick they cost ({league_key})",
+                  title_style="bold", show_header=True)
+    for col in ("Team", "Keeper", "Pos", "Cost Rd", "Pick", "Value", "Best available there", "Surplus"):
+        table.add_column(col)
+    total_removed: dict[str, float] = {}
+    for k in keeper_rows:
+        row = by_board.get(str(k["canonical_id"]))
+        team_key = str(k["team_key"])
+        try:
+            team_slot = int(team_key.rsplit(".", 1)[-1])
+        except ValueError:
+            team_slot = slot
+        if row is None:
+            table.add_row(team_key, str(k["name"]), str(k["position"]),
+                          str(k["cost_round"]), "—", "off-board", "—", "—")
+            continue
+        line = surplus_line(row["name"], row["position"], value_of(row),
+                            int(k["cost_round"]), team_slot)
+        total_removed[team_key] = total_removed.get(team_key, 0.0) + max(0.0, line["value"])
+        table.add_row(
+            team_key.rsplit(".", 1)[-1], line["name"], line["position"],
+            str(line["cost_round"]), str(line["pick"]), f"{line['value']:+.1f}",
+            f"{line['alt_name']} ({line['alt_value']:+.1f})",
+            f"[{'green' if line['surplus'] > 0 else 'red'}]{line['surplus']:+.1f}[/]",
+        )
+    console.print(table)
+    console.print(
+        "[dim]Pool impact (positive board value each team removes via keepers): "
+        + ", ".join(f"slot {t.rsplit('.', 1)[-1]}: {v:.0f}" for t, v in sorted(total_removed.items()))
+        + "[/]"
+    )
     store.close()
 
 

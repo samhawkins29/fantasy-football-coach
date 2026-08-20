@@ -175,6 +175,10 @@ class ScheduleSource:
     name: str = "nflverse_schedule"
     nflverse: NflverseSource = field(default_factory=NflverseSource)
     sos_seasons: int = 1
+    #: Fraction of the observed points-allowed deviation that survives into a
+    #: multiplier (the rest shrinks to neutral 1.0). One season of defense
+    #: data is noisy — k≈0.35 keeps the direction, kills the tier swings.
+    shrink: float = 0.35
     clamp: tuple[float, float] = (0.75, 1.25)
     scoring: Mapping[str, float] = field(default_factory=lambda: dict(REFERENCE_SCORING))
     cache_dir: Path = field(default_factory=lambda: Path(".cache"))
@@ -312,8 +316,15 @@ class ScheduleSource:
             mean = sum(per_game.values()) / len(per_game)
             if mean <= 0:
                 continue
+            # Shrink the raw ratio toward neutral before clamping: a single
+            # completed season of points-allowed is mostly noise (defense
+            # year-over-year correlation is weak), so the multiplier keeps
+            # ``shrink`` of the observed deviation and no more — a nudge that
+            # cannot swing tiers.
             multipliers[position] = {
-                team: round(min(hi, max(lo, pts / mean)), 3)
+                team: round(
+                    min(hi, max(lo, 1.0 + self.shrink * (pts / mean - 1.0))), 3
+                )
                 for team, pts in per_game.items()
             }
         return multipliers, sorted(used_years)

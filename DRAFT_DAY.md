@@ -47,7 +47,7 @@ Check the printed replacement baselines (QB/RB/WR/TE/LB/DL/DB) and the
 
 ```powershell
 .venv\Scripts\python.exe -m fantasy_coach vintage      # every slice should be recent
-.venv\Scripts\python.exe -m fantasy_coach draft --simulate --sim-slot <your slot> --playoff-weight 0.3 --injury-weight 0.5 --sos-weight 0.5 --risk 0.2
+.venv\Scripts\python.exe -m fantasy_coach draft --simulate --sim-slot <your slot> --playoff-weight 0.2 --injury-weight 0.5 --sos-weight 0.3 --risk 0.2
 ```
 
 Offline replay of a full snake draft through the identical live loop at
@@ -59,6 +59,20 @@ NOW, the floor–ceiling range, the **Avail** column (P still there at your next
 pick: take now / coin flip / likely / safe), the "Plan:" line, tier cliffs,
 injury badges, the wk15–17 matchup strip, the room footer (runs + drift), the
 vintage footer.
+
+## 2b. Pick your 4 keepers (before Sep 1)
+
+```powershell
+.venv\Scripts\python.exe -m fantasy_coach keeper-value --candidate "Puka Nacua" --last-round 9
+.venv\Scripts\python.exe -m fantasy_coach keeper-value        # every stored keeper + pool impact
+```
+
+`surplus = value(keeper) − expected best available at the pick he costs`
+(computed on the stored board with all known keepers removed). Run each
+candidate, keep the top ≤4 positive surpluses. Uses `draft.my_slot` (or
+`--slot`). Once the league's keepers are known, enter them all (spec or
+draft-page Keepers panel) and re-run the no-argument form to see what the
+whole room removes from the pool.
 
 ## 3. Draft day (morning)
 
@@ -72,7 +86,7 @@ vintage footer.
 **Without Yahoo API access (the default plan):**
 
 ```powershell
-.venv\Scripts\python.exe -m fantasy_coach draft --manual --sim-slot <your slot> --playoff-weight 0.3 --sos-weight 0.5
+.venv\Scripts\python.exe -m fantasy_coach draft --manual --sim-slot <your slot> --playoff-weight 0.2 --sos-weight 0.3
 ```
 
 Opens the board next to the Yahoo draft room. As each pick happens: type the
@@ -82,6 +96,11 @@ is on the clock; change the picker only for a traded pick. Mis-entry: **↶
 Undo** (or Ctrl+Z), or hover the pick in *Recent picks* and click ✕. Every
 pick is saved to the store — if the page or the process dies, run the same
 command again and it resumes where you were (`--reset-draft` starts over).
+If the room drafts someone the search can't find at all (deep rookie, odd
+DEF — rare now that the Sleeper catalog fills the store), use the
+**Off-board pick** control: choose the position, optional name, Record — the
+slot and a roster spot at that position are consumed so whose-turn and
+survival stay correct, and the draft never stalls.
 The hero always shows "your pick is in N — likely gone by then". The
 *League* panel below the board is the whole room: every team's keepers +
 picks and what they still need — that's what the survival numbers read.
@@ -90,7 +109,7 @@ picks and what they still need — that's what the survival numbers read.
 **With Yahoo API access (if ever approved):**
 
 ```powershell
-.venv\Scripts\python.exe -m fantasy_coach draft --playoff-weight 0.3 --injury-weight 0.5
+.venv\Scripts\python.exe -m fantasy_coach draft --playoff-weight 0.2 --injury-weight 0.5
 ```
 
 Polls picks every ~2.5s, re-checks Sleeper statuses every 2 min, auto-detects
@@ -102,10 +121,10 @@ filling in whatever you haven't marked.)
 
 | Flag | What it does |
 |---|---|
-| `--playoff-weight w` | Draft value = (1−w)·season VORP + w·playoff-week strength (wk15–17). 0 = pure season value. 0.25–0.35 is sane; VORP/tiers never move, only draft value. |
-| `--injury-weight w` | How hard documented injury/durability discounts shade draft value. 0 = badges only, ranking unchanged. 0.5 = half the documented discount. |
+| `--playoff-weight w` | Draft value = season VORP + w·(playoff-week strength − season), capped at ±40 season-points of swing. 0 = pure season value. **0.15–0.25 is sane** (lowered: the SOS multipliers are now shrunk toward neutral — one season of defense data is noise, and the cap stops three matchup weeks rewriting a tier). |
+| `--injury-weight w` | How hard documented **soft**-risk discounts (Questionable/Doubtful + durability history) shade draft value. 0 = badges only. 0.5 = half the documented discount. Hard designations (O/SUS/PUP/NFI/IR) are ALWAYS applied as an expected-games haircut whatever this dial says — an August PUP-Achilles is priced near zero regardless. |
 | `--risk r` | Floor↔ceiling tilt in [-1,1]. 0 = median. `-0.5` leans on floors (safe team), `+0.5` on ceilings (upside — chasing a title). VORP/tiers never move. |
-| `--sos-weight s` | Per-week SOS mix in [0,1]: every week valued through its own position-specific matchup; playoff weeks weighted heavier via `--playoff-weight` on top. 0.3–0.5 is sane. |
+| `--sos-weight s` | Per-week SOS mix in [0,1]: every week valued through its own position-specific matchup; playoff weeks weighted heavier via `--playoff-weight` on top. **0.2–0.35 is sane** (the multipliers themselves are shrunk ~⅓ toward neutral now, so this dial is a mild seasoning, not a sauce). |
 | `--sim-seed N` | [simulate] A different, reproducible bot room. |
 | `--manual` | Live draft by hand entry (no Yahoo). `--sim-slot N` = your slot; `--reset-draft` forgets stored picks; `--yahoo-sync` best-effort overlay. |
 | `--status-interval s` | Seconds between live Sleeper status re-checks (default 120; don't go below ~60 — the blob is big). |
@@ -122,10 +141,15 @@ the recommendation carries a keeper-eligibility line every pick. Survival probab
 `draft_analysis`, pulled by `refresh`/warm) — without it they fall back to
 board rank with a wide spread and say so (`source: rank`).
 
-Optional: `PROJECTION_SOURCE=consensus` in `.env` blends the nflverse model
-with market-implied (ADP-calibrated) points before the board is built — set it
-**before** running `refresh` so the consensus cache warms; leave it unset for
-the certified single-source behavior (README "Consensus projections").
+Projections **default to the consensus blend** (nflverse model 0.6 + market
+0.4, rank-calibrated per position, with the market's share escalating where
+the model and the market wildly disagree — that's what fixed the
+history-only silliness like a breakout QB at board #1000). Set
+`PROJECTION_SOURCE=nflverse` in `.env` for the raw history model. The free
+market layer (Sleeper player catalog + FantasyFootballCalculator PPR ADP,
+both keyless) is pulled by `refresh` and cached, so rookies and team DEFs
+are on the board with market-derived values and survival gets real ADP with
+stdev — no Yahoo access needed.
 
 ## What can go wrong
 

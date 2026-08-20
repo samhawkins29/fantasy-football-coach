@@ -327,9 +327,12 @@ def test_kicker_and_defense_never_vanish():
     by_name = {e.name: e for e in board.entries}
     assert by_name["Leg Guy"].value_source == SOURCE_ADP
     assert by_name["Other Leg"].value_source == SOURCE_FLAT
-    assert by_name["Other Leg"].vorp == 0.0
+    # A kicker no mock room even drafts must sit BELOW the market-priced one —
+    # a flat 0.0 would absurdly outrank an ADP whose curve value is negative.
+    assert by_name["Other Leg"].vorp < by_name["Leg Guy"].vorp
     assert by_name["SF DST"].value_source == SOURCE_FLAT
     assert by_name["SF DST"].position == "DEF"
+    assert by_name["SF DST"].vorp == 0.0  # no priced DEF peers — plain flat
     assert board.skipped_no_signal == 0
 
 
@@ -420,3 +423,86 @@ def test_projection_without_stats_uses_prescored_points():
     )
     board = build_value_board([rec], make_settings([("WR", 1)], max_teams=1))
     assert board.entries[0].points == pytest.approx(222.0)
+
+
+# --------------------------------------------------------------------------- #
+# Streaming positions (P0-3): raised baselines + compressed VORP
+# --------------------------------------------------------------------------- #
+
+
+def _flat_rec(gid, pos, points):
+    return ProjectionRecord(
+        source="t", source_id=gid, source_id_field="gsis_id",
+        points=points, position=pos, name=gid, stats={},
+    )
+
+
+def _idp_settings(num_teams=10):
+    # Sam's shape: 1 QB, 2 RB, 1 IDP flex ("D"), 1 DEF.
+    return make_settings(
+        [("QB", 1), ("RB", 2), ("D", 1), ("BN", 3)], max_teams=num_teams
+    )
+
+
+def test_streaming_baseline_raises_to_band_mean_and_compresses_vorp():
+    from fantasy_coach.value.board import STREAM_VALUE_FACTOR
+
+    # 30 LBs at 200, 199, …, 171: demand (10 D-flex slots, all LB) baseline
+    # = LB11 = 190; the streaming band (ranks 10..25, num_teams=10) mean =
+    # mean(191..176) = 183.5 < 190, so the demand baseline stands and the
+    # residual is compressed: LB1 vorp = 0.5 × (200 − 190) = 5.
+    recs = [_flat_rec(f"LB{i}", "LB", 200.0 - (i - 1)) for i in range(1, 31)]
+    recs += [_flat_rec(f"QB{i}", "QB", 300.0 - 10 * (i - 1)) for i in range(1, 15)]
+    recs += [_flat_rec(f"RB{i}", "RB", 250.0 - 5 * (i - 1)) for i in range(1, 31)]
+    board = build_value_board(recs, _idp_settings(), num_teams=10)
+    lb1 = next(e for e in board.entries if e.canonical_id == "LB1")
+    raw = 200.0 - board.baselines["LB"]
+    assert lb1.vorp == pytest.approx(raw * STREAM_VALUE_FACTOR)
+    assert lb1.vorp < raw  # compressed, never inflated
+
+
+def test_streaming_band_raises_a_too_generous_demand_baseline():
+    # Steep LB pool where demand would set a low baseline: only ~4 slots'
+    # worth of demand (num_teams=4) but 30 LBs — the streaming band mean
+    # (ranks 4..10) exceeds the demand baseline and wins (max of the two).
+    from fantasy_coach.value.board import replacement_baselines, streaming_baselines
+
+    pool = [200.0, 150.0, 120.0, 100.0, 95.0, 90.0, 85.0, 80.0, 75.0, 70.0, 65.0]
+    settings = _idp_settings(num_teams=4)
+    base = replacement_baselines({"LB": pool}, settings, 4)
+    raised = streaming_baselines(base, {"LB": pool}, 4)
+    assert raised["LB"] >= base["LB"]
+    # Non-streaming positions pass through untouched.
+    base_rb = replacement_baselines({"RB": pool}, settings, 4)
+    assert streaming_baselines(base_rb, {"RB": pool}, 4)["RB"] == base_rb["RB"]
+
+
+def test_streaming_entries_skip_the_playoff_blend():
+    # A juicy playoff schedule must not reinflate a compressed IDP value —
+    # streamed positions pick their own matchups weekly.
+    from fantasy_coach.ingest.schedule import SeasonSchedule
+
+    opponents = {"KC": {w: "OPP" for w in range(1, 18) if w != 9}}
+    sched = SeasonSchedule(
+        season=2026, opponents=opponents, byes={"KC": 9},
+        multipliers={"LB": {"OPP": 1.25}, "RB": {"OPP": 1.25}},
+    )
+    recs = [_flat_rec(f"LB{i}", "LB", 200.0 - i) for i in range(1, 31)]
+    recs += [_flat_rec(f"RB{i}", "RB", 250.0 - 5 * i) for i in range(1, 31)]
+    for r in recs:
+        r.team = "KC"
+    settings = LeagueSettings(
+        max_teams=10,
+        playoff_start_week=15,
+        num_playoff_teams=6,
+        uses_playoff=True,
+        roster_positions=[
+            RosterPosition(position="RB", count=2),
+            RosterPosition(position="D", count=1),
+        ],
+    )
+    board = build_value_board(recs, settings, num_teams=10, schedule=sched, playoff_weight=0.5)
+    lb1 = next(e for e in board.entries if e.canonical_id == "LB1")
+    rb1 = next(e for e in board.entries if e.canonical_id == "RB1")
+    assert lb1.draft_value is None and lb1.playoff_vorp is None  # no blend
+    assert rb1.draft_value is not None  # normal positions still blend
